@@ -1,0 +1,106 @@
+{
+  "personal": {
+    "fullName": "Your Name",
+    "firstName": "Your",
+    "lastName": "Name",
+    "email": "your.email@example.com",
+    "phone": "9876543210",
+    "city": "Bengaluru",
+    "state": "Karnataka",
+    "country": "India",
+    "linkedin": "https://linkedin.com/in/yourprofile",
+    "github": "https://github.com/yourprofile"
+  },
+  "work": {
+    "currentRole": {
+      "jobTitle": "Data Analyst",
+      "company": "Company Name",
+      "yearsExperience": "1",
+      "currentSalary": "350000"
+    },
+    "targetRole": {
+      "jobTitle": "Data Analyst",
+      "targetLocation": "Bengaluru, Karnataka, India",
+      "expectedSalary": "450000",
+      "noticePeriod": "Immediate / 15 Days"
+    },
+    "defaultProficiency": "Intermediate"
+  },
+  "education": {
+    "degree": "Bachelor's Degree",
+    "major": "Computer Science / Information Systems",
+    "university": "Your University",
+    "graduationYear": "2023"
+  },
+  "screening": [
+    {
+      "keywords": "authorized, legally authorized, legal right to work, eligible to work",
+      "answer": "Yes"
+    },
+    {
+      "keywords": "sponsorship, require sponsorship, visa sponsorship",
+      "answer": "No"
+    },
+    {
+      "keywords": "relocate, relocation, willing to relocate",
+      "answer": "Yes"
+    },
+    {
+      "keywords": "commute, comfortable commuting, able to commute",
+      "answer": "Yes"
+    },
+    {
+      "keywords": "notice period, how soon can you start, availability, start date",
+      "answer": "Immediate to 15 Days"
+    },
+    {
+      "keywords": "experience, years of experience, how many years",
+      "answer": "1"
+    },
+    {
+      "keywords": "excel, advanced excel, vlookup, pivot tables",
+      "answer": "Yes, highly proficient in Advanced Excel including VLOOKUP, XLOOKUP, Pivot Tables, and Macros."
+    },
+    {
+      "keywords": "sql, queries, mysql, postgresql",
+      "answer": "Yes, proficient in SQL queries, joins, aggregations, and data transformation."
+    },
+    {
+      "keywords": "power bi, powerbi, tableau, dashboard",
+      "answer": "Yes, experienced in designing Power BI dashboards, DAX measures, and reports."
+    },
+    {
+      "keywords": "python, pandas, numpy, scripting",
+      "answer": "Yes, proficient in Python for data analysis, automation, and ETL pipelines."
+    },
+    {
+      "keywords": "current ctc, current salary, present salary",
+      "answer": "350000"
+    },
+    {
+      "keywords": "expected ctc, expected salary",
+      "answer": "450000"
+    }
+  ],
+  "autoApplierSettings": {
+    "targetJobQuery": "Data Analyst",
+    "targetLocation": "Bengaluru, Karnataka, India",
+    "dateFilter": "r86400",
+    "sortBy": "DD",
+    "dualStrategy": true,
+    "minMonthlySalary": 25000,
+    "userYearsExp": 1,
+    "unlistedExpAction": "apply",
+    "maxJobsPerSession": 0,
+    "stepDelayMs": 1000,
+    "blacklistKeywords": "intern, unpaid, bpo, telecaller, faculty, teaching, night shift, annotator, annotation, reviewer, labeler, labeling, ai trainer, rlhf, evaluator, transcription, data entry, crossing hurdles, outlier, remotasks, alignerr, mindrift, oneforma",
+    "blockAiSpam": true,
+    "matchTitleRelevance": true,
+    "strictLocation": true,
+    "autoSubmit": true,
+    "uncheckFollowCompany": true,
+    "saveToLinkedInProfile": true,
+    "pauseOnUnmatchedFields": true,
+    "pauseOnCaptcha": true
+  }
+}

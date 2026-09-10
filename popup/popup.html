@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Auto-Applier</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <span class="app-logo">💼</span>
+        <div>
+          <h1 class="app-title">LinkedIn <span>Auto-Applier</span></h1>
+          <span id="session-badge" class="status-badge status-idle">Ready</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="theme-toggle-btn" class="icon-btn" title="Toggle Dark/Light Mode">🌙</button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab-btn active" data-tab="tab-dashboard">🚀 Auto-Apply</button>
+      <button class="nav-tab-btn" data-tab="tab-rules">⚙️ Rules</button>
+      <button class="nav-tab-btn" data-tab="tab-applied">✅ Applied <span id="applied-count-badge" class="badge">0</span></button>
+      <button class="nav-tab-btn" data-tab="tab-saved">📋 Saved Jobs <span id="saved-count-badge" class="badge">0</span></button>
+      <button class="nav-tab-btn" data-tab="tab-profile">👤 Profile & QA</button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="tab-content-area">
+
+      <!-- TAB 1: AUTO-APPLY DASHBOARD -->
+      <section id="tab-dashboard" class="tab-pane active">
+        <div class="control-card">
+          <div class="control-actions">
+            <button id="btn-start" class="btn btn-primary btn-large">
+              <span>▶</span> Start Auto-Apply
+            </button>
+            <button id="btn-stop" class="btn btn-danger btn-large" disabled>
+              <span>⏹</span> Stop
+            </button>
+          </div>
+          <div class="progress-wrapper">
+            <div class="progress-info">
+              <span>Session Mode</span>
+              <span id="progress-text">Fast & Uncapped</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="metric-label">Scanned</span>
+            <span id="metric-scanned" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-success">
+            <span class="metric-label">Applied ✅</span>
+            <span id="metric-applied" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-warning">
+            <span class="metric-label">Saved 📋</span>
+            <span id="metric-saved" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-neutral">
+            <span class="metric-label">Skipped ⏭️</span>
+            <span id="metric-skipped" class="metric-value">0</span>
+          </div>
+        </div>
+
+        <div class="console-card">
+          <div class="console-header">
+            <span>Live Activity Log</span>
+            <button id="btn-clear-logs" class="text-btn">Clear</button>
+          </div>
+          <div id="console-logs" class="console-body">
+            <div class="log-entry log-info">[System] LinkedIn Auto-Applier standing by. Click Start to begin session.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: RULES & FILTERS -->
+      <section id="tab-rules" class="tab-pane">
+        <div class="form-card">
+          <h3 class="card-title">🔍 Search Targets</h3>
+          <div class="form-group">
+            <label for="rule-query">Target Job Title / Keywords</label>
+            <input type="text" id="rule-query" placeholder="e.g. Data Analyst, MIS Analyst">
+          </div>
+          <div class="form-group">
+            <label for="rule-location">Target Location</label>
+            <input type="text" id="rule-location" placeholder="e.g. Bengaluru, Karnataka, India or Remote">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="rule-date-filter">Date Posted Range</label>
+              <select id="rule-date-filter">
+                <option value="r86400" selected>Past 24 Hours (Recommended)</option>
+                <option value="r604800">Past Week</option>
+                <option value="r2592000">Past Month</option>
+                <option value="any">Any Time</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="rule-sort-by">Sort Results By</label>
+              <select id="rule-sort-by">
+                <option value="DD" selected>Most Recent (sortBy=DD)</option>
+                <option value="R">Most Relevant (LinkedIn Default)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-card">
+          <h3 class="card-title">🛡️ Filter & Decision Rules</h3>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-dual-strategy" checked>
+              <span><strong>Dual Strategy (Recommended):</strong> Apply to Easy Apply + Save external company-site jobs for review</span>
+            </label>
+            <small class="hint">Unchecking will force the LinkedIn search to show 'Easy Apply' jobs only.</small>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="rule-exp">Max Experience Cutoff (Years)</label>
+              <input type="number" id="rule-exp" value="1" min="0" max="30">
+              <small class="hint">Jobs requiring more years will be skipped.</small>
+            </div>
+            <div class="form-group">
+              <label for="rule-salary">Minimum Salary Floor (₹/mo)</label>
+              <input type="number" id="rule-salary" value="25000" min="0" step="1000">
+              <small class="hint">Jobs with salaries below this will be skipped.</small>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="rule-unlisted-exp">If Experience Is Not Listed in Job:</label>
+            <select id="rule-unlisted-exp">
+              <option value="apply" selected>Auto-Apply if Easy Apply / Save if Company Site (Recommended)</option>
+              <option value="save">Always Save to List (Manual Review)</option>
+              <option value="skip">Skip Job</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="rule-blacklist">Negative Keywords / Blacklist</label>
+            <input type="text" id="rule-blacklist" placeholder="intern, unpaid, bpo, telecaller, faculty, teaching, night shift">
+            <small class="hint">Skips any job containing these words in title or description.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-block-ai-spam" checked>
+              <span><strong>🛡️ Block AI Gig & Annotation Spam:</strong> Skip "$/hr", "Crossing Hurdles", Annotators, Reviewers, AI Trainers</span>
+            </label>
+            <small class="hint">Instantly filters out micro-task, hourly gig, and AI labeling contractor spam listings.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-title-relevance" checked>
+              <span><strong>🎯 Strict Job Title Match:</strong> Job title must contain target role (e.g. "Analyst")</span>
+            </label>
+            <small class="hint">Prevents applying to unrelated roles that only share a single generic keyword like 'Data'.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-strict-location" checked>
+              <span>Strict Location Match (Target City + Remote Only)</span>
+            </label>
+            <small class="hint">Skips jobs outside your target location unless marked 'Remote'.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-uncheck-follow" checked>
+              <span>Automatically uncheck "Follow company" box on review step</span>
+            </label>
+            <small class="hint">Keeps your personal LinkedIn feed clean from spam.</small>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-native-save" checked>
+              <span>Also click LinkedIn's native <strong>[Save]</strong> button on the page</span>
+            </label>
+            <small class="hint">Bookmarks company-site jobs directly into your personal LinkedIn 'Saved Jobs' profile as well as the extension.</small>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="rule-max-jobs">Max Jobs (0 = Uncapped)</label>
+              <input type="number" id="rule-max-jobs" value="0" min="0" max="500">
+              <small class="hint">0 runs until all search pages are completed.</small>
+            </div>
+            <div class="form-group">
+              <label for="rule-delay">Action Delay (ms)</label>
+              <input type="number" id="rule-delay" value="1000" min="500" max="10000" step="100">
+              <small class="hint">Fast default: 1000ms.</small>
+            </div>
+          </div>
+
+          <button id="btn-save-rules" class="btn btn-primary full-width">Save Rules & Filters</button>
+        </div>
+      </section>
+
+      <!-- TAB 3: APPLIED JOBS -->
+      <section id="tab-applied" class="tab-pane">
+        <div class="saved-actions-bar">
+          <input type="text" id="applied-search-input" placeholder="Search applied listings..." class="search-input">
+          <div class="btn-group">
+            <button id="btn-export-applied" class="btn btn-secondary">Export CSV</button>
+            <button id="btn-clear-applied" class="btn btn-danger">Clear All</button>
+          </div>
+        </div>
+        <div id="applied-jobs-container" class="saved-list-container">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+      <!-- TAB 4: SAVED JOBS -->
+      <section id="tab-saved" class="tab-pane">
+        <div class="saved-actions-bar">
+          <input type="text" id="saved-search-input" placeholder="Search saved listings..." class="search-input">
+          <div class="btn-group">
+            <button id="btn-export-saved" class="btn btn-secondary">Export CSV</button>
+            <button id="btn-clear-saved" class="btn btn-danger">Clear All</button>
+          </div>
+        </div>
+        <div id="saved-jobs-container" class="saved-list-container">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </section>
+
+      <!-- TAB 4: PROFILE & SCREENING -->
+      <section id="tab-profile" class="tab-pane">
+        <div class="form-card">
+          <h3 class="card-title">👤 Personal Details</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prof-fullname">Full Name</label>
+              <input type="text" id="prof-fullname" placeholder="Your Full Name">
+            </div>
+            <div class="form-group">
+              <label for="prof-phone">Phone Number</label>
+              <input type="text" id="prof-phone" placeholder="e.g. 9876543210">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prof-email">Email Address</label>
+              <input type="email" id="prof-email" placeholder="your.email@example.com">
+            </div>
+            <div class="form-group">
+              <label for="prof-city">Current City, State</label>
+              <input type="text" id="prof-city" placeholder="e.g. Bengaluru, Karnataka">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="prof-linkedin">LinkedIn Profile URL</label>
+            <input type="url" id="prof-linkedin" placeholder="https://www.linkedin.com/in/yourprofile">
+          </div>
+        </div>
+
+        <div class="form-card">
+          <h3 class="card-title">💼 Work & Background</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prof-curr-title">Current Role / Title</label>
+              <input type="text" id="prof-curr-title" placeholder="e.g. Data Analyst">
+            </div>
+            <div class="form-group">
+              <label for="prof-curr-company">Current Company</label>
+              <input type="text" id="prof-curr-company" placeholder="e.g. Current Employer">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prof-years-exp">Total Years of Experience</label>
+              <input type="text" id="prof-years-exp" placeholder="1">
+            </div>
+            <div class="form-group">
+              <label for="prof-notice">Notice Period</label>
+              <input type="text" id="prof-notice" placeholder="e.g. Immediate / 15 Days">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prof-curr-salary">Current CTC / Salary</label>
+              <input type="text" id="prof-curr-salary" placeholder="e.g. 350000">
+            </div>
+            <div class="form-group">
+              <label for="prof-exp-salary">Expected CTC / Salary</label>
+              <input type="text" id="prof-exp-salary" placeholder="e.g. 450000">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-card">
+          <div class="card-header-flex">
+            <h3 class="card-title">❓ Custom Screening Q&A Bank</h3>
+            <button id="btn-add-qa" class="btn btn-secondary btn-small">+ Add Question</button>
+          </div>
+          <p class="hint" style="margin-bottom: 12px;">Auto-answers employer questions during Easy Apply. If an unmapped required question appears, the bot pauses and alerts you.</p>
+          <div id="qa-bank-list" class="qa-bank-container">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
+
+        <button id="btn-save-profile" class="btn btn-primary full-width" style="margin-bottom: 20px;">Save Profile & QA Bank</button>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
