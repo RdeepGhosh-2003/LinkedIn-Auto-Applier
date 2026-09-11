@@ -49,6 +49,26 @@
     return sleep(Math.max(600, baseMs + jitter));
   }
 
+  // Synthesize pleasant two-tone chime via Web Audio API (offline, zero assets)
+  function playAudioChime() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch (_) {}
+  }
+
   function updateFloatingPill(text, isDone = false) {
     let pill = document.getElementById('linkedin-auto-applier-pill');
     if (!pill) {
@@ -364,6 +384,7 @@
 
       // Check CAPTCHA
       if (window.LinkedInAutoFormFiller?.checkCaptcha()) {
+        playAudioChime();
         log('⚠️ CAPTCHA detected on application! Pausing for user verification...', 'warning');
         chrome.runtime.sendMessage({ action: 'CAPTCHA_ALERT' }).catch(() => {});
         while (window.LinkedInAutoFormFiller?.checkCaptcha() && !isHalted) {
@@ -385,6 +406,7 @@
 
       // Check for unhandled required questions
       if (fillRes.unhandledRequired && fillRes.unhandledRequired.length > 0) {
+        playAudioChime();
         const unhandledLabels = fillRes.unhandledRequired.map(u => u.label).filter(Boolean).join(', ');
         log(`⚠️ Unknown required question: "${unhandledLabels || 'Question'}". Pausing for manual input...`, 'warning');
         chrome.runtime.sendMessage({
@@ -471,7 +493,7 @@
 
     if (isAlreadyAppliedOnLinkedIn) {
       log(`⏭️ Skipped: Job #${jobId} already applied on LinkedIn.`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
       return 'skipped_already_applied';
     }
 
@@ -503,7 +525,21 @@
       return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    // 0. AI Gig, Micro-Task & Annotation Spam Shield
+    // 0. Blocked Companies / Agency Blacklist Check
+    const blockedCompaniesStr = settings?.blockedCompanies || '';
+    if (blockedCompaniesStr) {
+      const blockedTokens = blockedCompaniesStr.toLowerCase().split(/[,|]/).map(t => t.trim()).filter(t => t.length > 1);
+      const compLower = (company || '').toLowerCase();
+      const matchedBlocked = blockedTokens.find(token => compLower.includes(token));
+      if (matchedBlocked) {
+        log(`⏭️ Skipped: "${jobTitle}" at "${company}" matches blocked company filter ("${matchedBlocked}").`, 'info');
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'company' } }).catch(() => {});
+        card.style.outline = originalOutline;
+        return 'skipped_company';
+      }
+    }
+
+    // 0.1 AI Gig, Micro-Task & Annotation Spam Shield
     if (settings?.blockAiSpam !== false) {
       const titleLower = (jobTitle || '').toLowerCase();
       const companyLower = (company || '').toLowerCase();
@@ -538,13 +574,13 @@
                            matchedSpamCompany ? `Spam agency "${company}"` :
                            `AI labeling/gig keyword "${matchedGigKeyword}" in title`;
         log(`🛡️ Skipped AI Gig Spam: "${jobTitle}" at "${company}" (${flagReason}).`, 'warning');
-        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'ai_spam' } }).catch(() => {});
         card.style.outline = originalOutline;
         return 'skipped_ai_spam';
       }
     }
 
-    // 0.1 Strict Job Title Relevance Filter
+    // 0.2 Strict Job Title Relevance Filter
     if (settings?.matchTitleRelevance !== false) {
       const targetQuery = (settings?.targetJobQuery || profile?.work?.targetRole?.jobTitle || 'Data Analyst').toLowerCase().trim();
       const titleLower = (jobTitle || '').toLowerCase();
@@ -554,7 +590,7 @@
         const isAnalystRole = /\b(analyst|analytics|analysis|bi\b|business intelligence|reporting|insights|mis\b)/i.test(titleLower);
         if (!isAnalystRole) {
           log(`🎯 Skipped: "${jobTitle}" does not contain target "Analyst" role keywords (Title Relevance Filter).`, 'info');
-          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'title_relevance' } }).catch(() => {});
           card.style.outline = originalOutline;
           return 'skipped_title_relevance';
         }
@@ -565,14 +601,14 @@
         const hasTokenMatch = targetTokens.some(tok => titleLower.includes(tok));
         if (!hasTokenMatch && targetTokens.length > 0) {
           log(`🎯 Skipped: "${jobTitle}" does not match target keywords from "${targetQuery}" (Title Relevance Filter).`, 'info');
-          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'title_relevance' } }).catch(() => {});
           card.style.outline = originalOutline;
           return 'skipped_title_relevance';
         }
       }
     }
 
-    // 0.2 Blacklist / Negative Keywords
+    // 0.3 Blacklist / Negative Keywords
     const blacklistStr = settings?.blacklistKeywords || 'intern, unpaid, bpo, telecaller, faculty, teaching, night shift, annotator, annotation, reviewer, labeler, labeling, ai trainer, rlhf, evaluator, transcription, data entry, crossing hurdles, outlier, remotasks, alignerr';
     const blacklistTokens = blacklistStr.toLowerCase().split(/[,|]/).map(t => t.trim()).filter(t => t.length > 1);
 
@@ -584,31 +620,38 @@
 
     if (matchedBlacklist) {
       log(`⏭️ Skipped: "${jobTitle}" matches blacklist keyword "${matchedBlacklist}".`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'blacklist' } }).catch(() => {});
       card.style.outline = originalOutline;
       return 'skipped_blacklist';
     }
 
-    // 0.1 Strict Location Filter (Target City + Remote Only)
+    // 0.4 Strict Location Filter (Target City + Remote Only, Countrywide India Matching)
     if (settings?.strictLocation !== false) {
-      const locLower = location.toLowerCase();
+      const locLower = (location || '').toLowerCase();
       const rawTarget = (settings?.targetLocation || '').toLowerCase().trim();
       const targetTokens = rawTarget.split(/[,|]/).map(t => t.trim()).filter(t => t.length > 2);
       const isRemote = locLower.includes('remote') || fullText.toLowerCase().includes('remote') || fullText.toLowerCase().includes('work from home');
 
       let isCityMatch = targetTokens.length === 0;
       if (!isCityMatch) {
-        isCityMatch = targetTokens.some(t => {
-          if (t === 'bangalore' || t === 'bengaluru') {
-            return locLower.includes('bangalore') || locLower.includes('bengaluru');
-          }
-          return locLower.includes(t);
-        });
+        if (targetTokens.includes('india') || rawTarget === 'india' || rawTarget === 'all india') {
+          isCityMatch = true;
+        } else {
+          isCityMatch = targetTokens.some(t => {
+            if (t === 'bangalore' || t === 'bengaluru') {
+              return locLower.includes('bangalore') || locLower.includes('bengaluru');
+            }
+            if (t === 'delhi' || t === 'ncr' || t === 'gurgaon' || t === 'gurugram' || t === 'noida') {
+              return locLower.includes('delhi') || locLower.includes('ncr') || locLower.includes('gurgaon') || locLower.includes('gurugram') || locLower.includes('noida');
+            }
+            return locLower.includes(t);
+          });
+        }
       }
 
       if (!isRemote && !isCityMatch) {
         log(`⏭️ Skipped: "${jobTitle}" at "${location}" is outside target location and not Remote.`, 'info');
-        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'location' } }).catch(() => {});
         card.style.outline = originalOutline;
         return 'skipped_location';
       }
@@ -619,7 +662,7 @@
     const sal = parseMonthlySalary(salaryText);
     if (sal && sal.maxMonthly < minSalaryFloor) {
       log(`⏭️ Skipped: "${jobTitle}" salary (₹${sal.maxMonthly.toLocaleString()}/mo) below ₹${minSalaryFloor.toLocaleString()} floor.`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'salary' } }).catch(() => {});
       card.style.outline = originalOutline;
       return 'skipped_salary';
     }
@@ -629,7 +672,7 @@
     if (lowerBadge.includes('mid-senior') || lowerBadge.includes('director') || lowerBadge.includes('executive')) {
       if (!/\b(junior|jr\.|trainee|associate)\b/i.test(jobTitle)) {
         log(`⏭️ Skipped: "${jobTitle}" has senior LinkedIn level (${badgeText}).`, 'info');
-        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'senior' } }).catch(() => {});
         card.style.outline = originalOutline;
         return 'skipped_senior_badge';
       }
@@ -641,14 +684,14 @@
 
     if (reqExp !== null && reqExp > userExp) {
       log(`⏭️ Skipped: "${jobTitle}" requires ${reqExp}+ years experience (Profile: ${userExp} yr).`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'experience' } }).catch(() => {});
       card.style.outline = originalOutline;
       return 'skipped_experience';
     }
 
     if (reqExp === null && settings?.unlistedExpAction === 'skip') {
       log(`⏭️ Skipped: "${jobTitle}" has no experience listed (Policy: Skip).`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'experience' } }).catch(() => {});
       card.style.outline = originalOutline;
       return 'skipped_unlisted_exp';
     }
@@ -683,38 +726,56 @@
           job: { jobId, title: jobTitle, company, location, salary: salaryText, url: jobUrl }
         }).catch(() => {});
       } else {
-        log(`⚠️ Could not auto-complete application for "${jobTitle}" (${result.reason || 'unresolved'}).`, 'warning');
-        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
-      }
-      card.style.outline = originalOutline;
-      return result.success ? 'applied' : 'apply_failed';
-    }
-
-    // Subcase B: External "Apply" -> SAVE ONLY IF CRITERIA MATCHES
-    if (applyInfo.type === 'company_site') {
-      if (settings?.dualStrategy !== false) {
-        log(`📋 Criteria matched! Saving external company site job: "${jobTitle}" at "${company}".`, 'info');
+        const failDetail = result.reason === 'unresolved_fields' ? 'Unresolved Questions' :
+                           result.reason === 'max_steps_exceeded' ? 'Multi-Step Limit' :
+                           (result.reason || 'Manual Review');
+        log(`⚠️ Could not auto-complete application for "${jobTitle}" (${failDetail}).`, 'warning');
+        log(`📋 Auto-saving to "Saved Jobs" for manual completion so opportunity is not lost!`, 'info');
         if (settings?.saveToLinkedInProfile !== false) {
           triggerLinkedInNativeSave(scope);
           await sleep(500);
         }
         chrome.runtime.sendMessage({
           action: 'SAVE_JOB',
-          job: { jobId, title: jobTitle, company, location, salary: salaryText, url: applyInfo.url || jobUrl, reason: 'Criteria Matched (Company Site)' }
+          job: {
+            jobId,
+            title: jobTitle,
+            company,
+            location,
+            salary: salaryText,
+            url: jobUrl,
+            reason: `⚠️ Incomplete: ${failDetail}`
+          }
         }).catch(() => {});
-        card.style.outline = originalOutline;
-        return 'saved_company_site';
-      } else {
-        log(`⏭️ Skipped: External apply job (Easy Apply Only mode active).`, 'info');
-        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+      }
+      card.style.outline = originalOutline;
+      return result.success ? 'applied' : 'saved_incomplete';
+    }
+
+    // Subcase B: External "Apply" -> SAVE ONLY IF CRITERIA MATCHES (or skip if easyApplyOnly)
+    if (applyInfo.type === 'company_site') {
+      if (settings?.easyApplyOnly || settings?.dualStrategy === false) {
+        log(`⏭️ Skipped: "${jobTitle}" requires application on external company site (Easy Apply Only mode active).`, 'info');
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'easy_apply' } }).catch(() => {});
         card.style.outline = originalOutline;
         return 'skipped_external';
       }
+      log(`📋 Criteria matched! Saving external company site job: "${jobTitle}" at "${company}".`, 'info');
+      if (settings?.saveToLinkedInProfile !== false) {
+        triggerLinkedInNativeSave(scope);
+        await sleep(500);
+      }
+      chrome.runtime.sendMessage({
+        action: 'SAVE_JOB',
+        job: { jobId, title: jobTitle, company, location, salary: salaryText, url: applyInfo.url || jobUrl, reason: 'Criteria Matched (Company Site)' }
+      }).catch(() => {});
+      card.style.outline = originalOutline;
+      return 'saved_company_site';
     }
 
     // Subcase C: Unrecognized apply button
     log(`⏭️ Skipped: No active apply button found for "${jobTitle}".`, 'info');
-    chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1 } }).catch(() => {});
+    chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
     card.style.outline = originalOutline;
     return 'skipped_unrecognized';
   }
@@ -788,6 +849,7 @@
 
         if (maxJobs > 0 && totalProcessed >= maxJobs) {
           log(`🎯 Session cap reached (${totalProcessed} jobs applied/saved).`, 'success');
+          playAudioChime();
           chrome.runtime.sendMessage({ action: 'SESSION_COMPLETED', summary: currentStats }).catch(() => {});
           updateFloatingPill(`🎉 Completed ${totalProcessed} jobs!`, true);
           break;
@@ -850,6 +912,7 @@
             }
           } catch (cardErr) {
             log(`⚠️ Error evaluating card: ${cardErr.message}. Skipping to next job...`, 'warning');
+            chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
             try { card.style.outline = ''; } catch (_) {}
           }
         }
@@ -858,9 +921,9 @@
 
         const hasNext = await navigateToNextPage();
         if (!hasNext) {
-          log('No further pages found. Completed all available listings.', 'info');
+          log('No further pages found for current search query.', 'info');
           const finalData = await chrome.storage.local.get(['autoApplySession']);
-          chrome.runtime.sendMessage({ action: 'SESSION_COMPLETED', summary: finalData.autoApplySession?.stats }).catch(() => {});
+          chrome.runtime.sendMessage({ action: 'QUERY_RESULTS_FINISHED', summary: finalData.autoApplySession?.stats }).catch(() => {});
           break;
         }
       }
@@ -880,6 +943,11 @@
       removeFloatingPill();
       log('Session halted by user request.', 'warning');
       sendResponse({ status: 'halted' });
+      return true;
+    }
+    if (request.action === 'PLAY_ALERT_CHIME') {
+      playAudioChime();
+      sendResponse({ status: 'played' });
       return true;
     }
   });

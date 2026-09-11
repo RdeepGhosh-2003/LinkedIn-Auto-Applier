@@ -31,6 +31,7 @@
       <button class="nav-tab-btn" data-tab="tab-rules">⚙️ Rules</button>
       <button class="nav-tab-btn" data-tab="tab-applied">✅ Applied <span id="applied-count-badge" class="badge">0</span></button>
       <button class="nav-tab-btn" data-tab="tab-saved">📋 Saved Jobs <span id="saved-count-badge" class="badge">0</span></button>
+      <button class="nav-tab-btn" data-tab="tab-logs">📊 Logs</button>
       <button class="nav-tab-btn" data-tab="tab-profile">👤 Profile & QA</button>
     </nav>
 
@@ -132,6 +133,14 @@
             <small class="hint">Unchecking will force the LinkedIn search to show 'Easy Apply' jobs only.</small>
           </div>
 
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rule-easy-apply-only">
+              <span><strong>⚡ Easy Apply Only:</strong> Skip company-site jobs without saving them</span>
+            </label>
+            <small class="hint">Focuses 100% on instant one-click Easy Apply opportunities.</small>
+          </div>
+
           <div class="form-row">
             <div class="form-group">
               <label for="rule-exp">Max Experience Cutoff (Years)</label>
@@ -158,6 +167,12 @@
             <label for="rule-blacklist">Negative Keywords / Blacklist</label>
             <input type="text" id="rule-blacklist" placeholder="intern, unpaid, bpo, telecaller, faculty, teaching, night shift">
             <small class="hint">Skips any job containing these words in title or description.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="rule-blocked-companies">Blocked Companies / Consultancies</label>
+            <input type="text" id="rule-blocked-companies" placeholder="e.g. TeamLease, Quess Corp, Crossing Hurdles, Outlier">
+            <small class="hint">Skips jobs from these staffing agencies or consultancies.</small>
           </div>
 
           <div class="form-group">
@@ -245,7 +260,82 @@
         </div>
       </section>
 
-      <!-- TAB 4: PROFILE & SCREENING -->
+      <!-- TAB 5: LOGS & HISTORICAL ANALYTICS -->
+      <section id="tab-logs" class="tab-pane">
+        <!-- Period Filter Selector -->
+        <div class="period-selector-card">
+          <div class="period-tabs">
+            <button class="period-btn active" data-period="daily">📅 Daily</button>
+            <button class="period-btn" data-period="weekly">🗓️ Weekly</button>
+            <button class="period-btn" data-period="monthly">📆 Monthly</button>
+            <button class="period-btn" data-period="yearly">📈 Yearly</button>
+          </div>
+          <div class="period-info-row">
+            <span id="logs-period-label" class="period-label">Today's Activity</span>
+            <span id="logs-sessions-count" class="period-sub">0 Sessions Run</span>
+          </div>
+        </div>
+
+        <!-- Period Progress Card -->
+        <div class="control-card logs-progress-card">
+          <div class="progress-wrapper">
+            <div class="progress-info">
+              <span id="logs-progress-title">Session Progress</span>
+              <span id="logs-progress-text">0 / 0 Jobs</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div id="logs-progress-bar-fill" class="progress-bar-fill" style="width: 0%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="metric-label">Scanned</span>
+            <span id="logs-metric-scanned" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-success">
+            <span class="metric-label">Applied ✅</span>
+            <span id="logs-metric-applied" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-warning">
+            <span class="metric-label">Saved 📋</span>
+            <span id="logs-metric-saved" class="metric-value">0</span>
+          </div>
+          <div class="metric-card metric-neutral">
+            <span class="metric-label">Skipped ⏭️</span>
+            <span id="logs-metric-skipped" class="metric-value">0</span>
+          </div>
+        </div>
+
+        <!-- Filter Drop-off Analytics Card -->
+        <div class="logs-dropoff-card">
+          <div class="logs-details-header">
+            <span>🎯 Filter Drop-off Breakdown</span>
+            <span id="dropoff-total-skipped" class="period-sub">0 Skipped</span>
+          </div>
+          <div id="logs-dropoff-container" class="dropoff-container" style="padding: 8px 12px;">
+            <!-- Dynamically populated bars -->
+          </div>
+        </div>
+
+        <!-- Historical Breakdown Details -->
+        <div class="logs-details-card">
+          <div class="logs-details-header">
+            <span id="logs-table-heading">Activity Breakdown</span>
+            <div class="logs-actions-group">
+              <button id="btn-export-logs" class="text-btn" title="Export Analytics to CSV">📥 Export CSV</button>
+              <button id="btn-clear-history" class="text-btn" title="Clear Historical Logs">🗑 Clear</button>
+            </div>
+          </div>
+          <div id="logs-breakdown-container" class="logs-breakdown-body">
+            <!-- Dynamically populated table/sessions -->
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: PROFILE & SCREENING -->
       <section id="tab-profile" class="tab-pane">
         <div class="form-card">
           <h3 class="card-title">👤 Personal Details</h3>
@@ -307,20 +397,43 @@
               <input type="text" id="prof-exp-salary" placeholder="e.g. 450000">
             </div>
           </div>
+          <button id="btn-save-profile" class="btn btn-primary full-width" style="margin-top: 6px;">Save Profile Details</button>
         </div>
 
-        <div class="form-card">
-          <div class="card-header-flex">
-            <h3 class="card-title">❓ Custom Screening Q&A Bank</h3>
-            <button id="btn-add-qa" class="btn btn-secondary btn-small">+ Add Question</button>
+        <!-- SCREENING Q&A BANK MANAGER -->
+        <div class="form-card" style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div>
+              <h3 class="card-title" style="margin-bottom: 2px;">🧠 Screening Q&A Bank</h3>
+              <small class="hint">Auto-answers employer questions during Easy Apply.</small>
+            </div>
+            <button id="btn-open-add-qa" class="btn btn-secondary" style="font-size: 11px; padding: 4px 10px;">+ Add Question</button>
           </div>
-          <p class="hint" style="margin-bottom: 12px;">Auto-answers employer questions during Easy Apply. If an unmapped required question appears, the bot pauses and alerts you.</p>
-          <div id="qa-bank-list" class="qa-bank-container">
-            <!-- Populated dynamically via JS -->
+
+          <!-- Add / Edit Question Form (collapsible) -->
+          <div id="qa-form-container" class="qa-form-wrapper" style="display: none; margin-bottom: 14px; background: var(--bg-primary); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-weight: 600; font-size: 12px; margin-bottom: 8px;" id="qa-form-title">Add Screening Rule</div>
+            <input type="hidden" id="qa-edit-index" value="-1">
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label for="qa-input-keywords" style="font-size: 11px;">Question Keywords (comma-separated)</label>
+              <input type="text" id="qa-input-keywords" placeholder="e.g. excel, vlookup, pivot table" style="font-size: 12px; padding: 6px 10px;">
+              <small class="hint">Matched against employer screening questions on LinkedIn.</small>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+              <label for="qa-input-answer" style="font-size: 11px;">Answer Value</label>
+              <input type="text" id="qa-input-answer" placeholder="e.g. Yes, 2, Expert, Immediate" style="font-size: 12px; padding: 6px 10px;">
+            </div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+              <button id="btn-cancel-qa" class="btn btn-secondary" style="font-size: 11px; padding: 4px 10px;">Cancel</button>
+              <button id="btn-save-qa" class="btn btn-primary" style="font-size: 11px; padding: 4px 12px;">Save Answer</button>
+            </div>
+          </div>
+
+          <!-- List of Q&A cards -->
+          <div id="qa-list-container" class="qa-list-container">
+            <!-- Dynamically populated cards -->
           </div>
         </div>
-
-        <button id="btn-save-profile" class="btn btn-primary full-width" style="margin-bottom: 20px;">Save Profile & QA Bank</button>
       </section>
 
     </main>

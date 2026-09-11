@@ -22,26 +22,105 @@ async function appendSessionLog(message, type = 'info') {
   }
 }
 
+// Helper to get local date key formatted as YYYY-MM-DD
+function getLocalDateKey(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Update session statistics and persistent daily analytics
 async function updateSessionStats(delta) {
   try {
-    const data = await chrome.storage.local.get(['autoApplySession']);
+    const data = await chrome.storage.local.get(['autoApplySession', 'analyticsHistory']);
     const session = data.autoApplySession || { isRunning: false, stats: { scanned: 0, applied: 0, saved: 0, skipped: 0 } };
+    session.skipReasons = session.skipReasons || {
+      blacklist: 0,
+      ai_spam: 0,
+      title_relevance: 0,
+      location: 0,
+      company: 0,
+      salary: 0,
+      experience: 0,
+      senior: 0,
+      easy_apply: 0,
+      unrecognized: 0
+    };
 
-    if (!session.stats) session.stats = { scanned: 0, applied: 0, saved: 0, skipped: 0 };
     if (delta.scanned) session.stats.scanned = (session.stats.scanned || 0) + delta.scanned;
     if (delta.applied) session.stats.applied = (session.stats.applied || 0) + delta.applied;
     if (delta.saved) session.stats.saved = (session.stats.saved || 0) + delta.saved;
-    if (delta.skipped) session.stats.skipped = (session.stats.skipped || 0) + delta.skipped;
+    if (delta.skipped) {
+      session.stats.skipped = (session.stats.skipped || 0) + delta.skipped;
+      if (delta.reason) {
+        session.skipReasons[delta.reason] = (session.skipReasons[delta.reason] || 0) + delta.skipped;
+      }
+    }
 
-    await chrome.storage.local.set({ autoApplySession: session });
-    chrome.runtime.sendMessage({ action: 'STATS_UPDATED', stats: session.stats }).catch(() => {});
+    const today = getLocalDateKey();
+    const history = data.analyticsHistory || {};
+    if (!history[today]) {
+      history[today] = {
+        date: today,
+        scanned: 0,
+        applied: 0,
+        saved: 0,
+        skipped: 0,
+        sessions: session.isRunning ? 1 : 0,
+        skipReasons: {
+          blacklist: 0,
+          ai_spam: 0,
+          title_relevance: 0,
+          location: 0,
+          company: 0,
+          salary: 0,
+          experience: 0,
+          senior: 0,
+          easy_apply: 0,
+          unrecognized: 0
+        },
+        lastUpdated: Date.now()
+      };
+    }
+    history[today].skipReasons = history[today].skipReasons || {
+      blacklist: 0,
+      ai_spam: 0,
+      title_relevance: 0,
+      location: 0,
+      company: 0,
+      salary: 0,
+      experience: 0,
+      senior: 0,
+      easy_apply: 0,
+      unrecognized: 0
+    };
+
+    if (delta.scanned) history[today].scanned = (history[today].scanned || 0) + delta.scanned;
+    if (delta.applied) history[today].applied = (history[today].applied || 0) + delta.applied;
+    if (delta.saved) history[today].saved = (history[today].saved || 0) + delta.saved;
+    if (delta.skipped) {
+      history[today].skipped = (history[today].skipped || 0) + delta.skipped;
+      if (delta.reason) {
+        history[today].skipReasons[delta.reason] = (history[today].skipReasons[delta.reason] || 0) + delta.skipped;
+      }
+    }
+    history[today].lastUpdated = Date.now();
+
+    await chrome.storage.local.set({
+      autoApplySession: session,
+      analyticsHistory: history
+    });
+
+    chrome.runtime.sendMessage({ action: 'STATS_UPDATED', stats: session.stats, skipReasons: session.skipReasons }).catch(() => {});
+    chrome.runtime.sendMessage({ action: 'ANALYTICS_UPDATED', history }).catch(() => {});
   } catch (err) {
     console.error('[Background] Failed to update stats:', err);
   }
 }
 
-function buildLinkedInSearchUrl(settings = {}) {
-  const query = settings.targetJobQuery || 'Data Analyst';
+function buildLinkedInSearchUrl(queryStr, settings = {}) {
+  const query = queryStr || 'Data Analyst';
   const location = settings.targetLocation || 'Bengaluru, Karnataka, India';
   const dateFilter = settings.dateFilter || 'r86400'; // r86400 = Past 24 hours, r604800 = Past week
   const sortBy = settings.sortBy || 'DD'; // DD = Most recent
@@ -56,17 +135,34 @@ function buildLinkedInSearchUrl(settings = {}) {
     url += `&sortBy=${encodeURIComponent(sortBy)}`;
   }
 
-  // If user disabled Dual Strategy and wants Easy Apply ONLY
-  if (settings.dualStrategy === false) {
+  // If user enabled Easy Apply ONLY (or disabled Dual Strategy)
+  if (settings.easyApplyOnly || settings.dualStrategy === false) {
     url += `&f_AL=true`;
   }
 
   return url;
 }
 
-async function handleStartAutoApply(settings) {
-  const searchUrl = buildLinkedInSearchUrl(settings);
-  await appendSessionLog(`Launching LinkedIn with search: "${settings.targetJobQuery || 'Jobs'}" in "${settings.targetLocation || 'Location'}"`, 'info');
+async function handleStartAutoApply(customSettings) {
+  const data = await chrome.storage.local.get(['userProfile', 'autoApplierSettings', 'analyticsHistory', 'autoApplySession']);
+  const profile = data.userProfile || {};
+  const settings = Object.assign({}, profile.autoApplierSettings || {}, data.autoApplierSettings || {}, customSettings || {});
+
+  const rawQuery = settings.targetJobQuery || profile.work?.targetRole?.jobTitle || 'Data Analyst';
+  const queryQueue = rawQuery.split(/[,;]/).map(q => q.trim()).filter(q => q.length > 0);
+  if (queryQueue.length === 0) queryQueue.push('Data Analyst');
+
+  const currentQueryIndex = 0;
+  const currentQuery = queryQueue[currentQueryIndex];
+  const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
+
+  const prevProcessed = data.autoApplySession?.processedJobIds || [];
+
+  const queueLabel = queryQueue.length > 1
+    ? `role [1/${queryQueue.length}: "${currentQuery}"] (Queue: ${queryQueue.join(', ')})`
+    : `"${currentQuery}"`;
+
+  await appendSessionLog(`🚀 Auto-Apply launched for ${queueLabel} in "${settings.targetLocation || 'Bengaluru'}" (Filter: Last 24 Hours)`, 'info');
 
   const tabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
   let targetTab = null;
@@ -74,34 +170,99 @@ async function handleStartAutoApply(settings) {
   if (tabs.length > 0) {
     targetTab = tabs[0];
     await chrome.tabs.update(targetTab.id, { url: searchUrl, active: true });
+    await appendSessionLog(`Navigating existing LinkedIn tab #${targetTab.id}...`, 'info');
   } else {
     targetTab = await chrome.tabs.create({ url: searchUrl, active: true });
+    await appendSessionLog(`Opened new LinkedIn tab #${targetTab.id}...`, 'info');
   }
 
-  const existingData = await chrome.storage.local.get(['autoApplySession']);
-  const prevProcessed = existingData.autoApplySession?.processedJobIds || [];
-
+  const sessionId = 'sess_' + Date.now();
   const newSession = {
+    sessionId,
     isRunning: true,
     tabId: targetTab.id,
     startTime: Date.now(),
     settings,
+    queryQueue,
+    currentQueryIndex,
     stats: { scanned: 0, applied: 0, saved: 0, skipped: 0 },
+    skipReasons: {
+      blacklist: 0,
+      ai_spam: 0,
+      title_relevance: 0,
+      location: 0,
+      company: 0,
+      salary: 0,
+      experience: 0,
+      senior: 0,
+      easy_apply: 0,
+      unrecognized: 0
+    },
     processedJobIds: prevProcessed
   };
 
-  await chrome.storage.local.set({ autoApplySession: newSession });
-  chrome.runtime.sendMessage({ action: 'SESSION_STARTED', session: newSession }).catch(() => {});
+  const today = getLocalDateKey();
+  const history = data.analyticsHistory || {};
+  if (!history[today]) {
+    history[today] = {
+      date: today,
+      scanned: 0,
+      applied: 0,
+      saved: 0,
+      skipped: 0,
+      sessions: 0,
+      skipReasons: {
+        blacklist: 0,
+        ai_spam: 0,
+        title_relevance: 0,
+        location: 0,
+        company: 0,
+        salary: 0,
+        experience: 0,
+        senior: 0,
+        easy_apply: 0,
+        unrecognized: 0
+      },
+      lastUpdated: Date.now()
+    };
+  }
+  history[today].sessions = (history[today].sessions || 0) + 1;
+  history[today].lastUpdated = Date.now();
 
+  await chrome.storage.local.set({
+    autoApplySession: newSession,
+    sessionLogs: [],
+    analyticsHistory: history
+  });
+
+  chrome.runtime.sendMessage({ action: 'SESSION_STARTED', session: newSession }).catch(() => {});
   return { success: true, tabId: targetTab.id };
 }
 
 async function handleStopAutoApply() {
-  const data = await chrome.storage.local.get(['autoApplySession']);
+  const data = await chrome.storage.local.get(['autoApplySession', 'sessionHistory']);
   const session = data.autoApplySession || {};
   session.isRunning = false;
 
-  await chrome.storage.local.set({ autoApplySession: session });
+  if (session.startTime) {
+    const sessionHistory = data.sessionHistory || [];
+    sessionHistory.unshift({
+      id: session.sessionId || ('sess_' + session.startTime),
+      date: getLocalDateKey(new Date(session.startTime)),
+      startTime: session.startTime,
+      endTime: Date.now(),
+      query: (session.queryQueue && session.queryQueue.length > 1) ? session.queryQueue.join(', ') : (session.settings?.targetJobQuery || 'Job Search'),
+      location: session.settings?.targetLocation || '',
+      stats: { ...(session.stats || { scanned: 0, applied: 0, saved: 0, skipped: 0 }) },
+      skipReasons: { ...(session.skipReasons || {}) },
+      status: 'stopped'
+    });
+    if (sessionHistory.length > 100) sessionHistory.pop();
+    await chrome.storage.local.set({ autoApplySession: session, sessionHistory });
+  } else {
+    await chrome.storage.local.set({ autoApplySession: session });
+  }
+
   await appendSessionLog('Auto-Apply session stopped by user.', 'warning');
 
   if (session.tabId) {
@@ -117,7 +278,7 @@ async function handleSaveJob(job) {
     const data = await chrome.storage.local.get(['savedJobs']);
     const list = data.savedJobs || [];
     const jobItem = {
-      id: job.jobId || `saved_${Date.now()}`,
+      id: job.id || job.jobId || `saved_${Date.now()}`,
       title: job.title || 'Untitled',
       company: job.company || 'Unknown',
       location: job.location || '',
@@ -127,13 +288,20 @@ async function handleSaveJob(job) {
       savedAt: new Date().toLocaleString()
     };
 
-    if (!list.some(item => item.url === jobItem.url || (job.jobId && item.id === job.jobId))) {
+    const existingIndex = list.findIndex(item => (jobItem.url && item.url === jobItem.url) || (jobItem.id && item.id === jobItem.id));
+    if (existingIndex === -1) {
       list.unshift(jobItem);
       await chrome.storage.local.set({ savedJobs: list });
       await updateSessionStats({ saved: 1 });
-      await appendSessionLog(`💾 Saved external listing: "${jobItem.title}" at "${jobItem.company}"`, 'info');
+      await appendSessionLog(`💾 Saved listing: "${jobItem.title}" at "${jobItem.company}" (${jobItem.reason})`, 'info');
+    } else {
+      list[existingIndex].savedAt = new Date().toLocaleString();
+      if (jobItem.reason) list[existingIndex].reason = jobItem.reason;
+      await chrome.storage.local.set({ savedJobs: list });
+      await updateSessionStats({ saved: 1 });
+      await appendSessionLog(`💾 Updated saved listing: "${jobItem.title}" (${jobItem.reason})`, 'info');
     }
-    return { success: true };
+    return { success: true, savedCount: list.length };
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -144,7 +312,7 @@ async function handleJobApplied(job) {
     const data = await chrome.storage.local.get(['appliedJobs']);
     const list = data.appliedJobs || [];
     const jobItem = {
-      id: job.jobId || `applied_${Date.now()}`,
+      id: job.id || job.jobId || `applied_${Date.now()}`,
       title: job.title || 'Untitled',
       company: job.company || 'Unknown',
       location: job.location || '',
@@ -157,10 +325,93 @@ async function handleJobApplied(job) {
     await chrome.storage.local.set({ appliedJobs: list });
     await updateSessionStats({ applied: 1 });
     await appendSessionLog(`🎉 Successfully applied to: "${jobItem.title}" at "${jobItem.company}"`, 'success');
-    return { success: true };
+    return { success: true, appliedCount: list.length };
   } catch (err) {
     return { success: false, error: err.message };
   }
+}
+
+// Multi-role search queue progression
+async function handleQueryResultsFinished(summary = {}) {
+  const data = await chrome.storage.local.get(['autoApplySession']);
+  const session = data.autoApplySession;
+  if (!session || !session.isRunning) return { completed: true };
+
+  const queue = session.queryQueue || [];
+  const nextIndex = (session.currentQueryIndex || 0) + 1;
+
+  if (nextIndex < queue.length) {
+    session.currentQueryIndex = nextIndex;
+    const nextQuery = queue[nextIndex];
+    const searchUrl = buildLinkedInSearchUrl(nextQuery, session.settings);
+
+    await appendSessionLog(`🔄 Multi-Role Queue: Advancing to next role [${nextIndex + 1}/${queue.length}]: "${nextQuery}"...`, 'info');
+    await chrome.storage.local.set({ autoApplySession: session });
+
+    if (session.tabId) {
+      try {
+        await chrome.tabs.update(session.tabId, { url: searchUrl, active: true });
+        return { advanced: true, query: nextQuery };
+      } catch (err) {
+        console.warn('[Background] Failed to navigate session tab to next query:', err);
+      }
+    }
+  }
+
+  // All roles in queue finished!
+  await handleSessionCompleted(summary || session.stats);
+  return { completed: true };
+}
+
+async function handleSessionCompleted(summary = {}) {
+  const data = await chrome.storage.local.get(['autoApplySession', 'sessionHistory']);
+  const session = data.autoApplySession || {};
+  session.isRunning = false;
+
+  if (session.startTime) {
+    const sessionHistory = data.sessionHistory || [];
+    sessionHistory.unshift({
+      id: session.sessionId || ('sess_' + session.startTime),
+      date: getLocalDateKey(new Date(session.startTime)),
+      startTime: session.startTime,
+      endTime: Date.now(),
+      query: (session.queryQueue && session.queryQueue.length > 1) ? session.queryQueue.join(', ') : (session.settings?.targetJobQuery || 'Job Search'),
+      location: session.settings?.targetLocation || '',
+      stats: {
+        scanned: session.stats?.scanned || 0,
+        applied: summary.applied !== undefined ? summary.applied : (session.stats?.applied || 0),
+        saved: summary.saved !== undefined ? summary.saved : (session.stats?.saved || 0),
+        skipped: summary.skipped !== undefined ? summary.skipped : (session.stats?.skipped || 0)
+      },
+      skipReasons: { ...(session.skipReasons || {}) },
+      status: 'completed'
+    });
+    if (sessionHistory.length > 100) sessionHistory.pop();
+    await chrome.storage.local.set({ autoApplySession: session, sessionHistory });
+  } else {
+    await chrome.storage.local.set({ autoApplySession: session });
+  }
+
+  const applied = summary.applied !== undefined ? summary.applied : (session.stats?.applied || 0);
+  const saved = summary.saved !== undefined ? summary.saved : (session.stats?.saved || 0);
+  const msg = `🎉 LinkedIn session completed! Applied: ${applied}, Saved: ${saved}.`;
+  await appendSessionLog(msg, 'success');
+
+  if (chrome.notifications) {
+    try {
+      chrome.notifications.create(`complete_${Date.now()}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+        title: '🎯 LinkedIn Auto-Applier Finished!',
+        message: msg,
+        priority: 1
+      }, () => {
+        if (chrome.runtime.lastError) console.warn('[Background] Notification error:', chrome.runtime.lastError.message);
+      });
+    } catch (_) {}
+  }
+
+  chrome.runtime.sendMessage({ action: 'SESSION_STOPPED' }).catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -227,6 +478,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           message: `${request.question || 'An Easy Apply question requires manual input'}. Click to switch to tab.`,
           priority: 2,
           requireInteraction: true
+        }, () => {
+          if (chrome.runtime.lastError) console.warn('[Background] Notification error:', chrome.runtime.lastError.message);
         });
       } catch (_) {}
     }
@@ -248,6 +501,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           message: 'A security challenge appeared. Click here to solve it.',
           priority: 2,
           requireInteraction: true
+        }, () => {
+          if (chrome.runtime.lastError) console.warn('[Background] Notification error:', chrome.runtime.lastError.message);
         });
       } catch (_) {}
     }
@@ -255,27 +510,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'SESSION_COMPLETED') {
-    chrome.storage.local.get(['autoApplySession'], (data) => {
-      const stats = data.autoApplySession?.stats || {};
-      const applied = stats.applied || 0;
-      const saved = stats.saved || 0;
+  if (request.action === 'QUERY_RESULTS_FINISHED') {
+    if (sender && sender.frameId && sender.frameId !== 0) {
+      sendResponse({ status: 'ignored' });
+      return true;
+    }
+    handleQueryResultsFinished(request.summary)
+      .then(res => sendResponse(res))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 
-      if (chrome.notifications) {
-        try {
-          chrome.notifications.create(`complete_${Date.now()}`, {
-            type: 'basic',
-            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-            title: '🎉 LinkedIn Auto-Apply Complete!',
-            message: `Finished session: ${applied} jobs applied, ${saved} jobs saved for review.`,
-            priority: 1
-          });
-        } catch (_) {}
-      }
-      appendSessionLog(`Session completed. Applied: ${applied}, Saved: ${saved}.`, 'success');
-      handleStopAutoApply();
+  if (request.action === 'SESSION_COMPLETED') {
+    if (sender && sender.frameId && sender.frameId !== 0) {
+      sendResponse({ status: 'ignored' });
+      return true;
+    }
+    handleSessionCompleted(request.summary);
+    sendResponse({ status: 'ok' });
+    return true;
+  }
+
+  if (request.action === 'CLEAR_ANALYTICS_HISTORY') {
+    chrome.storage.local.set({
+      analyticsHistory: {},
+      sessionHistory: []
+    }, () => {
+      sendResponse({ success: true });
     });
-    sendResponse({ status: 'done' });
     return true;
   }
 });
