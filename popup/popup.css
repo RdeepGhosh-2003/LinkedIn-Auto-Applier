@@ -635,7 +635,7 @@ select:focus {
   flex-direction: column;
   overflow: hidden;
   height: auto;
-  max-height: 165px;
+  max-height: 185px;
   margin-bottom: 10px;
 }
 
@@ -759,6 +759,18 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 145px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.dropoff-container::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dropoff-container::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
 }
 
 .dropoff-row {

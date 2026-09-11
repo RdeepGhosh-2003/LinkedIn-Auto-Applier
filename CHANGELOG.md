@@ -1,4 +1,4 @@
-# 📜 LinkedIn Auto-Applier — Official Changelog & Release Ledger
+﻿# 📜 LinkedIn Auto-Applier — Official Changelog & Release Ledger
 
 This document serves as the permanent chronological reference for all updates, features, architectural decisions, and bug fixes implemented in the **LinkedIn Auto-Applier** browser extension.
 
@@ -8,6 +8,7 @@ This document serves as the permanent chronological reference for all updates, f
 
 | Version | Date & Timestamp | Type | Key Highlights |
 |---|---|---|---|
+| **`v1.1.4`** | 2026-09-11 23:55 IST | **Calculation Fix & Concurrency Mutex** | Resolved asynchronous storage race condition that caused Scanned metric drift; eliminated separate premature `scanned: 1` messages in favor of atomic updates; introduced Promise queue mutex for background storage writes; added `already_applied` category; made drop-off card scrollable (`max-height: 185px; overflow-y: auto`) to prevent clipped bars; added automated self-healing reconciliation for past records. |
 | **`v1.1.3`** | 2026-09-11 17:05 IST | **Location Matcher Upgrade** | Enabled countrywide matching for `targetLocation: "India"` / `"All India"` so Indian tech hub cities (Bengaluru, Pune, Mumbai, Delhi NCR, Hyderabad) are not falsely skipped; added Delhi/NCR/Gurgaon/Gurugram/Noida bidirectional alias resolution. |
 | **`v1.1.2`** | 2026-09-11 16:50 IST | **Core Accounting & Opportunity Protection** | Auto-saves incomplete LinkedIn Easy Apply applications to Saved Jobs with reason `⚠️ Incomplete: [Reason]`; ensures `Scanned = Applied + Saved + Skipped` is always 100% mathematically balanced; styles manual-review jobs with prominent coral badge in Saved tab. |
 | **`v1.1.1`** | 2026-09-11 16:30 IST | **UI & Spacing Optimization** | Equalized 6-tab navigation layout across 520px body; eliminated empty height void in Filter Drop-off Breakdown (`height: auto; max-height: 165px`); responsive auto-sizing on logs history table (`min-height: 110px; max-height: 215px`); skip metric reconciliation in drop-off analytics. |
@@ -17,6 +18,18 @@ This document serves as the permanent chronological reference for all updates, f
 ---
 
 ## 🔍 Detailed Version Records
+
+### `v1.1.4` — Calculation Fix, Concurrency Mutex & Drop-Off Card Scroll
+- **Date**: September 11, 2026 (23:55 IST)
+- **Commits**: `fix(math): eliminate async storage race condition, balance scanned metrics, add already_applied skip reason, and make drop-off card scrollable`
+- **Files Modified**: `scripts/applier.js`, `scripts/background.js`, `popup/popup.js`, `popup/popup.css`, `manifest.json`, `CHANGELOG.md`.
+- **What Was Added / Updated:**
+  1. **⚖️ Elimination of Storage Race Condition**: Fixed a critical race condition where inspecting a job dispatched `{ scanned: 1 }` and immediately afterwards dispatched `{ skipped: 1 }`, causing the second asynchronous `chrome.storage.local.get` to read stale storage before the first completed writing, silently dropping scanned counts.
+  2. **🔒 Promise Queue Mutex (`statsUpdateQueue`)**: Wrapped all background stats updates in a sequential promise chain so concurrent updates never race or overwrite each other.
+  3. **📐 Mathematical Invariant**: Enforced `scanned = applied + saved + skipped` at the storage layer, ensuring 100% mathematical balance at every instant across all UI views.
+  4. **📋 Explicit `already_applied` Category**: Jobs previously applied to on LinkedIn are now explicitly logged under `reason: 'already_applied'` (`📋 Already Applied (LinkedIn)`) instead of generic unclassified skips.
+  5. **📜 Scrollable Drop-off Breakdown**: Updated `.dropoff-container` with `max-height: 145px; overflow-y: auto;` and sleek custom scrollbars, ensuring all categories are viewable without clipping.
+  6. **🩹 Self-Healing Data Reconciliation**: Added automatic reconciliation on startup and popup load that repairs past historical records so `scanned` matches `applied + saved + skipped`.
 
 ### `v1.1.3` — Countrywide India & City Alias Location Matching
 - **Date**: September 11, 2026 (17:05 IST)
@@ -41,7 +54,7 @@ This document serves as the permanent chronological reference for all updates, f
 - **Commits**: `fix(ui): responsive drop-off and table heights, equalized 6-tab nav bar, and skip metric reconciliation`
 - **Files Modified**: `popup/popup.html`, `popup/popup.css`, `popup/popup.js`, `manifest.json`, `CHANGELOG.md`.
 - **What Was Added / Updated:**
-  1. **📐 Responsive Card Heights**: Refactored `.logs-dropoff-card` to dynamic `height: auto; max-height: 165px;` and `.logs-details-card` to `min-height: 110px; max-height: 215px; height: auto;`, preventing empty dark block voids when displaying short lists while keeping long lists cleanly scrollable.
+  1. **📐 Responsive Card Heights**: Refactored `.logs-dropoff-card` to dynamic `height: auto; max-height: 185px;` and `.logs-details-card` to `min-height: 110px; max-height: 215px; height: auto;`, preventing empty dark block voids when displaying short lists while keeping long lists cleanly scrollable.
   2. **🧭 Equalized 6-Tab Navigation Spacing**: Balanced all 6 navigation buttons (`🚀 Auto-Apply`, `⚙️ Rules`, `✅ Applied`, `📋 Saved Jobs`, `📊 Logs`, `👤 Profile & QA`) across the 520px body with `10.5px` typography, `padding: 10px 2px`, and `justify-content: space-between`.
   3. **🔄 Skip Metric Reconciliation**: Updated `renderDropoffAnalytics(reasons, totalPeriodSkipped)` across Daily, Weekly, Monthly, and Yearly views. If `totalPeriodSkipped > categorizedTotal`, the remaining skips are automatically categorized as `⏳ Prior / General Filters` so the breakdown sum matches the period totals.
 

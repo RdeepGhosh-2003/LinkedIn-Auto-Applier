@@ -30,92 +30,155 @@ function getLocalDateKey(d = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+// Async mutex queue for sequential atomic stats updates
+let statsUpdateQueue = Promise.resolve();
+
 // Update session statistics and persistent daily analytics
-async function updateSessionStats(delta) {
-  try {
-    const data = await chrome.storage.local.get(['autoApplySession', 'analyticsHistory']);
-    const session = data.autoApplySession || { isRunning: false, stats: { scanned: 0, applied: 0, saved: 0, skipped: 0 } };
-    session.skipReasons = session.skipReasons || {
-      blacklist: 0,
-      ai_spam: 0,
-      title_relevance: 0,
-      location: 0,
-      company: 0,
-      salary: 0,
-      experience: 0,
-      senior: 0,
-      easy_apply: 0,
-      unrecognized: 0
-    };
-
-    if (delta.scanned) session.stats.scanned = (session.stats.scanned || 0) + delta.scanned;
-    if (delta.applied) session.stats.applied = (session.stats.applied || 0) + delta.applied;
-    if (delta.saved) session.stats.saved = (session.stats.saved || 0) + delta.saved;
-    if (delta.skipped) {
-      session.stats.skipped = (session.stats.skipped || 0) + delta.skipped;
-      if (delta.reason) {
-        session.skipReasons[delta.reason] = (session.skipReasons[delta.reason] || 0) + delta.skipped;
-      }
-    }
-
-    const today = getLocalDateKey();
-    const history = data.analyticsHistory || {};
-    if (!history[today]) {
-      history[today] = {
-        date: today,
-        scanned: 0,
-        applied: 0,
-        saved: 0,
-        skipped: 0,
-        sessions: session.isRunning ? 1 : 0,
-        skipReasons: {
-          blacklist: 0,
-          ai_spam: 0,
-          title_relevance: 0,
-          location: 0,
-          company: 0,
-          salary: 0,
-          experience: 0,
-          senior: 0,
-          easy_apply: 0,
-          unrecognized: 0
-        },
-        lastUpdated: Date.now()
+function updateSessionStats(delta) {
+  statsUpdateQueue = statsUpdateQueue.then(async () => {
+    try {
+      const data = await chrome.storage.local.get(['autoApplySession', 'analyticsHistory']);
+      const session = data.autoApplySession || { isRunning: false, stats: { scanned: 0, applied: 0, saved: 0, skipped: 0 } };
+      session.skipReasons = session.skipReasons || {
+        blacklist: 0,
+        ai_spam: 0,
+        title_relevance: 0,
+        location: 0,
+        company: 0,
+        salary: 0,
+        experience: 0,
+        senior: 0,
+        easy_apply: 0,
+        already_applied: 0,
+        unrecognized: 0
       };
-    }
-    history[today].skipReasons = history[today].skipReasons || {
-      blacklist: 0,
-      ai_spam: 0,
-      title_relevance: 0,
-      location: 0,
-      company: 0,
-      salary: 0,
-      experience: 0,
-      senior: 0,
-      easy_apply: 0,
-      unrecognized: 0
-    };
 
-    if (delta.scanned) history[today].scanned = (history[today].scanned || 0) + delta.scanned;
-    if (delta.applied) history[today].applied = (history[today].applied || 0) + delta.applied;
-    if (delta.saved) history[today].saved = (history[today].saved || 0) + delta.saved;
-    if (delta.skipped) {
-      history[today].skipped = (history[today].skipped || 0) + delta.skipped;
-      if (delta.reason) {
-        history[today].skipReasons[delta.reason] = (history[today].skipReasons[delta.reason] || 0) + delta.skipped;
+      if (delta.applied) session.stats.applied = (session.stats.applied || 0) + delta.applied;
+      if (delta.saved) session.stats.saved = (session.stats.saved || 0) + delta.saved;
+      if (delta.skipped) {
+        session.stats.skipped = (session.stats.skipped || 0) + delta.skipped;
+        if (delta.reason) {
+          session.skipReasons[delta.reason] = (session.skipReasons[delta.reason] || 0) + delta.skipped;
+        }
+      }
+      // Mathematical Invariant: Scanned is ALWAYS strictly the sum of applied + saved + skipped
+      session.stats.scanned = (session.stats.applied || 0) + (session.stats.saved || 0) + (session.stats.skipped || 0);
+
+      const today = getLocalDateKey();
+      const history = data.analyticsHistory || {};
+      if (!history[today]) {
+        history[today] = {
+          date: today,
+          scanned: 0,
+          applied: 0,
+          saved: 0,
+          skipped: 0,
+          sessions: session.isRunning ? 1 : 0,
+          skipReasons: {
+            blacklist: 0,
+            ai_spam: 0,
+            title_relevance: 0,
+            location: 0,
+            company: 0,
+            salary: 0,
+            experience: 0,
+            senior: 0,
+            easy_apply: 0,
+            already_applied: 0,
+            unrecognized: 0
+          },
+          lastUpdated: Date.now()
+        };
+      }
+      history[today].skipReasons = history[today].skipReasons || {
+        blacklist: 0,
+        ai_spam: 0,
+        title_relevance: 0,
+        location: 0,
+        company: 0,
+        salary: 0,
+        experience: 0,
+        senior: 0,
+        easy_apply: 0,
+        already_applied: 0,
+        unrecognized: 0
+      };
+
+      if (delta.applied) history[today].applied = (history[today].applied || 0) + delta.applied;
+      if (delta.saved) history[today].saved = (history[today].saved || 0) + delta.saved;
+      if (delta.skipped) {
+        history[today].skipped = (history[today].skipped || 0) + delta.skipped;
+        if (delta.reason) {
+          history[today].skipReasons[delta.reason] = (history[today].skipReasons[delta.reason] || 0) + delta.skipped;
+        }
+      }
+      // Mathematical Invariant: Scanned is ALWAYS strictly the sum of applied + saved + skipped
+      history[today].scanned = (history[today].applied || 0) + (history[today].saved || 0) + (history[today].skipped || 0);
+      history[today].lastUpdated = Date.now();
+
+      await chrome.storage.local.set({
+        autoApplySession: session,
+        analyticsHistory: history
+      });
+
+      chrome.runtime.sendMessage({ action: 'STATS_UPDATED', stats: session.stats, skipReasons: session.skipReasons }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'ANALYTICS_UPDATED', history }).catch(() => {});
+    } catch (err) {
+      console.error('[Background] Failed to update stats:', err);
+    }
+  }).catch(err => console.error('[Background] Stats queue error:', err));
+
+  return statsUpdateQueue;
+}
+
+// Reconcile and heal any existing historical records so Scanned = Applied + Saved + Skipped
+async function reconcileAnalyticsHistory() {
+  try {
+    const data = await chrome.storage.local.get(['autoApplySession', 'analyticsHistory', 'sessionHistory']);
+    let modified = false;
+
+    if (data.autoApplySession?.stats) {
+      const s = data.autoApplySession.stats;
+      const expected = (s.applied || 0) + (s.saved || 0) + (s.skipped || 0);
+      if (s.scanned !== expected) {
+        s.scanned = expected;
+        modified = true;
       }
     }
-    history[today].lastUpdated = Date.now();
 
-    await chrome.storage.local.set({
-      autoApplySession: session,
-      analyticsHistory: history
-    });
+    if (data.analyticsHistory) {
+      for (const k of Object.keys(data.analyticsHistory)) {
+        const rec = data.analyticsHistory[k];
+        const expected = (rec.applied || 0) + (rec.saved || 0) + (rec.skipped || 0);
+        if (rec.scanned !== expected) {
+          rec.scanned = expected;
+          modified = true;
+        }
+      }
+    }
 
-    chrome.runtime.sendMessage({ action: 'STATS_UPDATED', stats: session.stats, skipReasons: session.skipReasons }).catch(() => {});
-    chrome.runtime.sendMessage({ action: 'ANALYTICS_UPDATED', history }).catch(() => {});
+    if (Array.isArray(data.sessionHistory)) {
+      data.sessionHistory.forEach(sess => {
+        if (sess.stats) {
+          const expected = (sess.stats.applied || 0) + (sess.stats.saved || 0) + (sess.stats.skipped || 0);
+          if (sess.stats.scanned !== expected) {
+            sess.stats.scanned = expected;
+            modified = true;
+          }
+        }
+      });
+    }
+
+    if (modified) {
+      await chrome.storage.local.set({
+        autoApplySession: data.autoApplySession,
+        analyticsHistory: data.analyticsHistory,
+        sessionHistory: data.sessionHistory
+      });
+      console.log('[Background] Reconciled historical stats to satisfy Scanned = Applied + Saved + Skipped.');
+    }
   } catch (err) {
-    console.error('[Background] Failed to update stats:', err);
+    console.warn('[Background] Failed to reconcile historical stats:', err);
   }
 }
 
@@ -196,6 +259,7 @@ async function handleStartAutoApply(customSettings) {
       experience: 0,
       senior: 0,
       easy_apply: 0,
+      already_applied: 0,
       unrecognized: 0
     },
     processedJobIds: prevProcessed
@@ -221,6 +285,7 @@ async function handleStartAutoApply(customSettings) {
         experience: 0,
         senior: 0,
         easy_apply: 0,
+        already_applied: 0,
         unrecognized: 0
       },
       lastUpdated: Date.now()
@@ -246,6 +311,9 @@ async function handleStopAutoApply() {
 
   if (session.startTime) {
     const sessionHistory = data.sessionHistory || [];
+    const sessApplied = session.stats?.applied || 0;
+    const sessSaved = session.stats?.saved || 0;
+    const sessSkipped = session.stats?.skipped || 0;
     sessionHistory.unshift({
       id: session.sessionId || ('sess_' + session.startTime),
       date: getLocalDateKey(new Date(session.startTime)),
@@ -253,7 +321,12 @@ async function handleStopAutoApply() {
       endTime: Date.now(),
       query: (session.queryQueue && session.queryQueue.length > 1) ? session.queryQueue.join(', ') : (session.settings?.targetJobQuery || 'Job Search'),
       location: session.settings?.targetLocation || '',
-      stats: { ...(session.stats || { scanned: 0, applied: 0, saved: 0, skipped: 0 }) },
+      stats: {
+        applied: sessApplied,
+        saved: sessSaved,
+        skipped: sessSkipped,
+        scanned: sessApplied + sessSaved + sessSkipped
+      },
       skipReasons: { ...(session.skipReasons || {}) },
       status: 'stopped'
     });
@@ -298,7 +371,7 @@ async function handleSaveJob(job) {
       list[existingIndex].savedAt = new Date().toLocaleString();
       if (jobItem.reason) list[existingIndex].reason = jobItem.reason;
       await chrome.storage.local.set({ savedJobs: list });
-      await updateSessionStats({ saved: 1 });
+      // Do not increment saved stats for an already-saved listing
       await appendSessionLog(`💾 Updated saved listing: "${jobItem.title}" (${jobItem.reason})`, 'info');
     }
     return { success: true, savedCount: list.length };
@@ -370,6 +443,9 @@ async function handleSessionCompleted(summary = {}) {
 
   if (session.startTime) {
     const sessionHistory = data.sessionHistory || [];
+    const applied = summary.applied !== undefined ? summary.applied : (session.stats?.applied || 0);
+    const saved = summary.saved !== undefined ? summary.saved : (session.stats?.saved || 0);
+    const skipped = summary.skipped !== undefined ? summary.skipped : (session.stats?.skipped || 0);
     sessionHistory.unshift({
       id: session.sessionId || ('sess_' + session.startTime),
       date: getLocalDateKey(new Date(session.startTime)),
@@ -378,10 +454,10 @@ async function handleSessionCompleted(summary = {}) {
       query: (session.queryQueue && session.queryQueue.length > 1) ? session.queryQueue.join(', ') : (session.settings?.targetJobQuery || 'Job Search'),
       location: session.settings?.targetLocation || '',
       stats: {
-        scanned: session.stats?.scanned || 0,
-        applied: summary.applied !== undefined ? summary.applied : (session.stats?.applied || 0),
-        saved: summary.saved !== undefined ? summary.saved : (session.stats?.saved || 0),
-        skipped: summary.skipped !== undefined ? summary.skipped : (session.stats?.skipped || 0)
+        applied,
+        saved,
+        skipped,
+        scanned: applied + saved + skipped
       },
       skipReasons: { ...(session.skipReasons || {}) },
       status: 'completed'
@@ -555,8 +631,9 @@ if (chrome.notifications) {
   });
 }
 
-// Initialize profile defaults on install
+// Initialize profile defaults on install and reconcile stats
 chrome.runtime.onInstalled.addListener(async () => {
+  await reconcileAnalyticsHistory();
   const data = await chrome.storage.local.get(['userProfile']);
   if (!data.userProfile) {
     try {
@@ -569,3 +646,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
   }
 });
+
+// Run reconciliation on service worker startup
+reconcileAnalyticsHistory();

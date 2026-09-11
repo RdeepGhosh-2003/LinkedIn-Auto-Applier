@@ -154,8 +154,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
+  // Self-heal and reconcile any historical records so Scanned strictly equals Applied + Saved + Skipped
+  async function reconcileAnalyticsHistory() {
+    try {
+      const data = await chrome.storage.local.get(['autoApplySession', 'analyticsHistory', 'sessionHistory']);
+      let modified = false;
+
+      if (data.autoApplySession?.stats) {
+        const s = data.autoApplySession.stats;
+        const expected = (s.applied || 0) + (s.saved || 0) + (s.skipped || 0);
+        if (s.scanned !== expected) {
+          s.scanned = expected;
+          modified = true;
+        }
+      }
+
+      if (data.analyticsHistory) {
+        for (const k of Object.keys(data.analyticsHistory)) {
+          const rec = data.analyticsHistory[k];
+          const expected = (rec.applied || 0) + (rec.saved || 0) + (rec.skipped || 0);
+          if (rec.scanned !== expected) {
+            rec.scanned = expected;
+            modified = true;
+          }
+        }
+      }
+
+      if (Array.isArray(data.sessionHistory)) {
+        data.sessionHistory.forEach(sess => {
+          if (sess.stats) {
+            const expected = (sess.stats.applied || 0) + (sess.stats.saved || 0) + (sess.stats.skipped || 0);
+            if (sess.stats.scanned !== expected) {
+              sess.stats.scanned = expected;
+              modified = true;
+            }
+          }
+        });
+      }
+
+      if (modified) {
+        await chrome.storage.local.set({
+          autoApplySession: data.autoApplySession,
+          analyticsHistory: data.analyticsHistory,
+          sessionHistory: data.sessionHistory
+        });
+      }
+    } catch (err) {
+      console.warn('[Popup] Reconciliation error:', err);
+    }
+  }
+
   // 3. Load & Hydrate Data
   async function loadInitialData() {
+    await reconcileAnalyticsHistory();
     const data = await chrome.storage.local.get(['userProfile', 'autoApplySession', 'sessionLogs', 'savedJobs', 'appliedJobs']);
     currentProfile = data.userProfile || {};
     currentSession = data.autoApplySession || {};
@@ -236,10 +287,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const stats = session?.stats || { scanned: 0, applied: 0, saved: 0, skipped: 0 };
-    metricScanned.textContent = stats.scanned || 0;
-    metricApplied.textContent = stats.applied || 0;
-    metricSaved.textContent = stats.saved || 0;
-    metricSkipped.textContent = stats.skipped || 0;
+    const applied = stats.applied || 0;
+    const saved = stats.saved || 0;
+    const skipped = stats.skipped || 0;
+    const scanned = applied + saved + skipped;
+
+    metricScanned.textContent = scanned;
+    metricApplied.textContent = applied;
+    metricSaved.textContent = saved;
+    metricSkipped.textContent = skipped;
 
     const maxJobs = session?.settings?.maxJobsPerSession || currentProfile?.autoApplierSettings?.maxJobsPerSession || 0;
     const totalDone = (stats.applied || 0) + (stats.saved || 0);
@@ -693,6 +749,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       { key: 'ai_spam', label: '🛡️ AI Gig / Annotation Spam', class: 'fill-spam' },
       { key: 'title_relevance', label: '🎯 Title Relevance Filter', class: 'fill-other' },
       { key: 'senior', label: '👔 Senior Level / Badge', class: 'fill-other' },
+      { key: 'already_applied', label: '📋 Already Applied (LinkedIn)', class: 'fill-other' },
       { key: 'unrecognized', label: '❓ Unrecognized / Expired', class: 'fill-other' }
     ];
 
@@ -753,12 +810,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Auto-seed today's record if missing or empty but current session has stats
     if ((!history[todayKey] || (history[todayKey].scanned === 0 && sessionStats.scanned > 0)) &&
         (sessionStats.scanned > 0 || sessionStats.saved > 0 || sessionStats.applied > 0 || sessionStats.skipped > 0)) {
+      const sessApplied = sessionStats.applied || 0;
+      const sessSaved = sessionStats.saved || 0;
+      const sessSkipped = sessionStats.skipped || 0;
       history[todayKey] = {
         date: todayKey,
-        scanned: sessionStats.scanned || 0,
-        applied: sessionStats.applied || 0,
-        saved: sessionStats.saved || 0,
-        skipped: sessionStats.skipped || 0,
+        scanned: sessApplied + sessSaved + sessSkipped,
+        applied: sessApplied,
+        saved: sessSaved,
+        skipped: sessSkipped,
         sessions: 1,
         lastUpdated: Date.now()
       };
@@ -776,10 +836,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       logsPeriodLabel.textContent = `Today, ${todayDayName} (${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })})`;
       logsSessionsCount.textContent = `${sessCount} ${sessCount === 1 ? 'Session' : 'Sessions'} Run`;
 
-      const scanned = rec.scanned || 0;
       const applied = rec.applied || 0;
       const saved = rec.saved || 0;
       const skipped = rec.skipped || 0;
+      const scanned = applied + saved + skipped;
 
       logsMetricScanned.textContent = scanned;
       logsMetricApplied.textContent = applied;
@@ -798,6 +858,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         logsBreakdownContainer.innerHTML = todaySessions.map((s, idx) => {
           const timeStr = s.startTime ? new Date(s.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent';
           const durMins = (s.startTime && s.endTime) ? Math.max(1, Math.round((s.endTime - s.startTime) / 60000)) : null;
+          const sApplied = s.stats?.applied || 0;
+          const sSaved = s.stats?.saved || 0;
+          const sSkipped = s.stats?.skipped || 0;
+          const sScanned = sApplied + sSaved + sSkipped;
           return `
             <div class="logs-session-item">
               <div class="logs-session-title">
@@ -806,10 +870,10 @@ document.addEventListener('DOMContentLoaded', async () => {
               </div>
               <div style="font-size: 10.5px; color: var(--text-secondary);">${escapeHtml(s.location || 'India')} &bull; Status: <strong>${escapeHtml(s.status || 'completed')}</strong></div>
               <div class="logs-session-tags">
-                <span class="tag-badge tag-scanned">Scanned: ${s.stats?.scanned || 0}</span>
-                <span class="tag-badge tag-applied">Applied: ${s.stats?.applied || 0}</span>
-                <span class="tag-badge tag-saved">Saved: ${s.stats?.saved || 0}</span>
-                <span class="tag-badge tag-skipped">Skipped: ${s.stats?.skipped || 0}</span>
+                <span class="tag-badge tag-scanned">Scanned: ${sScanned}</span>
+                <span class="tag-badge tag-applied">Applied: ${sApplied}</span>
+                <span class="tag-badge tag-saved">Saved: ${sSaved}</span>
+                <span class="tag-badge tag-skipped">Skipped: ${sSkipped}</span>
               </div>
             </div>
           `;
@@ -853,21 +917,26 @@ document.addEventListener('DOMContentLoaded', async () => {
           dayLabel = `Yesterday, ${dayOfWeek}`;
         }
 
+        const dayApplied = r.applied || 0;
+        const daySaved = r.saved || 0;
+        const daySkipped = r.skipped || 0;
+        const dayScanned = dayApplied + daySaved + daySkipped;
+
         days.push({
           dateKey: k,
           label: dayLabel,
           dateStr: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-          scanned: r.scanned || 0,
-          applied: r.applied || 0,
-          saved: r.saved || 0,
-          skipped: r.skipped || 0,
-          sessions: r.sessions || (r.scanned > 0 ? 1 : 0)
+          scanned: dayScanned,
+          applied: dayApplied,
+          saved: daySaved,
+          skipped: daySkipped,
+          sessions: r.sessions || (dayScanned > 0 ? 1 : 0)
         });
-        scannedSum += (r.scanned || 0);
-        appliedSum += (r.applied || 0);
-        savedSum += (r.saved || 0);
-        skippedSum += (r.skipped || 0);
-        sessSum += (r.sessions || (r.scanned > 0 ? 1 : 0));
+        scannedSum += dayScanned;
+        appliedSum += dayApplied;
+        savedSum += daySaved;
+        skippedSum += daySkipped;
+        sessSum += (r.sessions || (dayScanned > 0 ? 1 : 0));
       }
 
       logsPeriodLabel.textContent = `Last 7 Days (${days[0].dateStr} - ${days[6].dateStr})`;
@@ -941,15 +1010,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       Object.keys(history).sort().forEach(k => {
         if (k.startsWith(monthPrefix)) {
           const r = history[k];
-          scannedSum += (r.scanned || 0);
-          appliedSum += (r.applied || 0);
-          savedSum += (r.saved || 0);
-          skippedSum += (r.skipped || 0);
-          sessSum += (r.sessions || (r.scanned > 0 ? 1 : 0));
+          const mApplied = r.applied || 0;
+          const mSaved = r.saved || 0;
+          const mSkipped = r.skipped || 0;
+          const mScanned = mApplied + mSaved + mSkipped;
+          scannedSum += mScanned;
+          appliedSum += mApplied;
+          savedSum += mSaved;
+          skippedSum += mSkipped;
+          sessSum += (r.sessions || (mScanned > 0 ? 1 : 0));
           monthEntries.push({
             dateKey: k,
             dateStr: new Date(k + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', weekday: 'short' }),
-            ...r
+            ...r,
+            scanned: mScanned,
+            applied: mApplied,
+            saved: mSaved,
+            skipped: mSkipped
           });
         }
       });
@@ -1039,19 +1116,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       Object.keys(history).forEach(k => {
         if (k.startsWith(yearPrefix)) {
           const r = history[k];
+          const yApplied = r.applied || 0;
+          const ySaved = r.saved || 0;
+          const ySkipped = r.skipped || 0;
+          const yScanned = yApplied + ySaved + ySkipped;
           const mIdx = parseInt(k.substring(5, 7), 10) - 1;
           if (mIdx >= 0 && mIdx < 12) {
-            monthBuckets[mIdx].scanned += (r.scanned || 0);
-            monthBuckets[mIdx].applied += (r.applied || 0);
-            monthBuckets[mIdx].saved += (r.saved || 0);
-            monthBuckets[mIdx].skipped += (r.skipped || 0);
-            monthBuckets[mIdx].sessions += (r.sessions || (r.scanned > 0 ? 1 : 0));
+            monthBuckets[mIdx].scanned += yScanned;
+            monthBuckets[mIdx].applied += yApplied;
+            monthBuckets[mIdx].saved += ySaved;
+            monthBuckets[mIdx].skipped += ySkipped;
+            monthBuckets[mIdx].sessions += (r.sessions || (yScanned > 0 ? 1 : 0));
           }
-          scannedSum += (r.scanned || 0);
-          appliedSum += (r.applied || 0);
-          savedSum += (r.saved || 0);
-          skippedSum += (r.skipped || 0);
-          sessSum += (r.sessions || (r.scanned > 0 ? 1 : 0));
+          scannedSum += yScanned;
+          appliedSum += yApplied;
+          savedSum += ySaved;
+          skippedSum += ySkipped;
+          sessSum += (r.sessions || (yScanned > 0 ? 1 : 0));
         }
       });
 

@@ -481,8 +481,6 @@
     }
 
     await persistProcessedJobId(jobId);
-    // Every newly encountered listing is scanned
-    chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { scanned: 1 } }).catch(() => {});
 
     // Fast Skip: Already Applied badge on LinkedIn card
     const isAlreadyAppliedOnLinkedIn = card.querySelector('.job-card-container__footer-job-state, [data-test-job-card-applied]') ||
@@ -493,7 +491,7 @@
 
     if (isAlreadyAppliedOnLinkedIn) {
       log(`⏭️ Skipped: Job #${jobId} already applied on LinkedIn.`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'already_applied' } }).catch(() => {});
       return 'skipped_already_applied';
     }
 
