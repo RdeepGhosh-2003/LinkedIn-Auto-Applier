@@ -500,15 +500,49 @@
     return { success: false, reason: 'max_steps_exceeded' };
   }
 
+  function extractCardJobId(card) {
+    if (!card) return null;
+    return card.getAttribute('data-job-id') ||
+           card.getAttribute('data-occludable-job-id') ||
+           card.querySelector('[data-job-id]')?.getAttribute('data-job-id') ||
+           card.querySelector('a[href*="/jobs/view/"]')?.href?.match(/\/jobs\/view\/(\d+)/)?.[1] ||
+           card.querySelector('a[href*="currentJobId="]')?.href?.match(/currentJobId=(\d+)/)?.[1] ||
+           null;
+  }
+
+  function getJobListContainer() {
+    const selectors = [
+      '.jobs-search-results-list',
+      '.scaffold-layout__list-container',
+      '.jobs-search-results-list__list',
+      '.scaffold-layout__list',
+      'div[data-view-name="job-search-results-list"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && (el.scrollHeight > el.clientHeight || el.scrollTop > 0)) {
+        return el;
+      }
+    }
+    const sample = document.querySelector('.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item');
+    if (sample) {
+      let p = sample.parentElement;
+      while (p && p !== document.body) {
+        const style = window.getComputedStyle(p);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && p.scrollHeight > p.clientHeight) {
+          return p;
+        }
+        p = p.parentElement;
+      }
+    }
+    return document.querySelector('.jobs-search-results-list') || window;
+  }
+
   async function processJobCard(card, profile, settings) {
     if (isHalted) return 'halted';
 
     // 1. Extract job ID
-    const jobId = card.getAttribute('data-job-id') ||
-                  card.getAttribute('data-occludable-job-id') ||
-                  card.querySelector('[data-job-id]')?.getAttribute('data-job-id') ||
-                  card.querySelector('a[href*="/jobs/view/"]')?.href?.match(/\/jobs\/view\/(\d+)/)?.[1] ||
-                  `li_job_${Date.now()}`;
+    const jobId = extractCardJobId(card) || `li_job_${Date.now()}`;
 
     // Fast Skip: Already processed in local session history
     if (processedJobIds.has(String(jobId))) {
@@ -820,18 +854,22 @@
     log('Searching for Next Page of job results...', 'info');
 
     // Smooth scroll down the jobs list to make sure all items and pagination are loaded
-    const listContainer = document.querySelector('.jobs-search-results-list, .scaffold-layout__list-container') || window;
-    if (listContainer.scrollTo) {
+    const listContainer = getJobListContainer();
+    if (listContainer && listContainer.scrollTo) {
       listContainer.scrollTo({ top: listContainer.scrollHeight || 10000, behavior: 'smooth' });
+    } else if (window.scrollTo) {
+      window.scrollTo({ top: document.body.scrollHeight || 10000, behavior: 'smooth' });
     }
     await sleep(1500);
 
+    // 1. Direct Next button selectors
     const nextBtn = document.querySelector(
-      '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"], .artdeco-pagination__pages button.selected + button'
+      '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"], button[aria-label*="next page" i], button[aria-label*="next" i], .artdeco-pagination__pages button.selected + button, .artdeco-pagination__indicator--number.selected + li button'
     );
 
     if (nextBtn) {
-      if (nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true' || nextBtn.classList.contains('disabled')) {
+      const isDisabled = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true' || nextBtn.classList.contains('disabled');
+      if (isDisabled) {
         log('Reached the last page of results.', 'info');
         return false;
       }
@@ -839,10 +877,147 @@
       log('Navigating to next page of results...', 'info');
       triggerClick(nextBtn);
       await sleep(3500);
+
+      // Reset list scroll to top so cards on the new page are visible from the beginning
+      if (listContainer && listContainer.scrollTo) {
+        listContainer.scrollTo({ top: 0, behavior: 'instant' });
+      }
       return true;
     }
 
+    // 2. Fallback: Find currently selected page indicator and click the next page number
+    const activePageEl = document.querySelector('.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages .selected, [aria-current="true"]');
+    if (activePageEl) {
+      const nextSiblingLi = activePageEl.closest('li')?.nextElementSibling;
+      const nextNumBtn = nextSiblingLi?.querySelector('button');
+      if (nextNumBtn && !nextNumBtn.disabled) {
+        log(`Navigating to next page via page number button (${nextNumBtn.textContent.trim()})...`, 'info');
+        triggerClick(nextNumBtn);
+        await sleep(3500);
+        if (listContainer && listContainer.scrollTo) {
+          listContainer.scrollTo({ top: 0, behavior: 'instant' });
+        }
+        return true;
+      }
+    }
+
+    log('Reached the last page of results (no further pages found).', 'info');
     return false;
+  }
+
+  async function crawlCurrentPage(profile, settings, maxJobs, pageNum = 1) {
+    const listContainer = getJobListContainer();
+
+    // Reset container scroll to top at the start of each page
+    if (listContainer && listContainer.scrollTo) {
+      listContainer.scrollTo({ top: 0, behavior: 'instant' });
+      await sleep(600);
+    }
+
+    const processedThisPage = new Set();
+    let consecutiveNoNewCards = 0;
+    let scrollCycles = 0;
+    const MAX_PAGE_CYCLES = 35; // Maximum scrolling passes per page (sufficient for 25+ cards)
+
+    while (!isHalted && scrollCycles < MAX_PAGE_CYCLES) {
+      // 1. Check if session has been stopped or capped
+      const freshData = await chrome.storage.local.get(['autoApplySession']);
+      if (!freshData.autoApplySession?.isRunning) {
+        isHalted = true;
+        break;
+      }
+      const freshStats = freshData.autoApplySession?.stats || {};
+      const totalProcessed = (freshStats.applied || 0) + (freshStats.saved || 0);
+      if (maxJobs > 0 && totalProcessed >= maxJobs) {
+        isHalted = true;
+        break;
+      }
+
+      // 2. Query all job cards currently rendered in DOM
+      const rawCards = Array.from(document.querySelectorAll(
+        '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item'
+      )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
+
+      // 3. Find cards not yet processed on this page
+      const unprocessed = [];
+      for (const card of rawCards) {
+        const jid = extractCardJobId(card);
+        const cardKey = jid ? String(jid) : (card.innerText?.slice(0, 40) || '');
+        if (cardKey && !processedThisPage.has(cardKey)) {
+          unprocessed.push({ card, cardKey });
+        }
+      }
+
+      // 4. Process all newly rendered cards in this scroll segment
+      if (unprocessed.length > 0) {
+        consecutiveNoNewCards = 0;
+        for (const item of unprocessed) {
+          if (isHalted) break;
+
+          processedThisPage.add(item.cardKey);
+
+          const checkData = await chrome.storage.local.get(['autoApplySession']);
+          if (!checkData.autoApplySession?.isRunning) {
+            isHalted = true;
+            break;
+          }
+          const checkStats = checkData.autoApplySession?.stats || {};
+          if (maxJobs > 0 && ((checkStats.applied || 0) + (checkStats.saved || 0)) >= maxJobs) {
+            isHalted = true;
+            break;
+          }
+
+          try {
+            const status = await processJobCard(item.card, profile, settings);
+            if (status !== 'already_processed') {
+              await humanDelay(settings.stepDelayMs || 1000);
+            }
+          } catch (cardErr) {
+            log(`⚠️ Error evaluating card: ${cardErr.message}. Skipping to next job...`, 'warning');
+            chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
+            try { item.card.style.outline = ''; } catch (_) {}
+          }
+        }
+      } else {
+        consecutiveNoNewCards++;
+      }
+
+      if (isHalted) break;
+
+      // 5. Check if bottom of container has been reached
+      let isAtBottom = false;
+      if (listContainer && listContainer.scrollHeight > listContainer.clientHeight) {
+        isAtBottom = (listContainer.scrollTop + listContainer.clientHeight) >= (listContainer.scrollHeight - 60);
+      }
+
+      // If at bottom and no new cards appeared after 2 scroll checks, page is fully crawled!
+      if (isAtBottom && consecutiveNoNewCards >= 2) {
+        break;
+      }
+
+      // 6. Scroll down the list container to trigger lazy rendering of next card chunk
+      scrollCycles++;
+      const prevScroll = listContainer.scrollTop || 0;
+      if (listContainer && listContainer.scrollBy) {
+        listContainer.scrollBy({ top: 550, behavior: 'smooth' });
+      } else if (listContainer && listContainer.scrollTop !== undefined) {
+        listContainer.scrollTop += 550;
+      } else if (window.scrollBy) {
+        window.scrollBy(0, 550);
+      }
+
+      // Allow LinkedIn Ember/React virtual list time to render next cards
+      await sleep(750);
+
+      // If scroll didn't move (reached end of scrollable area)
+      if (listContainer.scrollTop === prevScroll && unprocessed.length === 0) {
+        consecutiveNoNewCards++;
+        if (consecutiveNoNewCards >= 2) break;
+      }
+    }
+
+    log(`✅ Completed Page ${pageNum}: Scanned ${processedThisPage.size} jobs.`, 'info');
+    return processedThisPage.size;
   }
 
   async function runCrawlLoop() {
@@ -891,6 +1066,7 @@
       }
 
       let emptyWaitCount = 0;
+      let currentPageNumber = 1;
 
       while (!isHalted) {
         const currentData = await chrome.storage.local.get(['autoApplySession']);
@@ -905,56 +1081,28 @@
           break;
         }
 
-        // Scroll job list container to trigger lazy loading of cards
-        const listContainer = document.querySelector('.jobs-search-results-list, .scaffold-layout__list-container');
-        if (listContainer) {
-          listContainer.scrollTop += 500;
-          await sleep(500);
+        // Standalone page guard inside loop
+        if (window.location.pathname.includes('/jobs/view')) {
+          log('⚠️ Detected standalone job view page (/jobs/view/). Redirecting back to search results...', 'warning');
+          updateFloatingPill('Redirecting to search page...');
+          const currentQuery = session.queryQueue?.[session.currentQueryIndex] || settings.targetJobQuery || profile.work?.targetRole?.jobTitle || 'Data Analyst';
+          const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
+          chrome.runtime.sendMessage({ action: 'REDIRECT_TO_SEARCH' }).catch(() => {});
+          await sleep(1500);
+          window.location.href = searchUrl;
+          return;
         }
 
-        const rawCards = Array.from(document.querySelectorAll(
-          '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item'
-        )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
-
-        // Deduplicate cards by job ID
-        const seenIdsThisLoop = new Set();
-        const cards = [];
-        for (const c of rawCards) {
-          const jid = c.getAttribute('data-job-id') ||
-                      c.getAttribute('data-occludable-job-id') ||
-                      c.querySelector('[data-job-id]')?.getAttribute('data-job-id') ||
-                      c.querySelector('a[href*="/jobs/view/"]')?.href?.match(/\/jobs\/view\/(\d+)/)?.[1];
-          if (jid) {
-            if (!seenIdsThisLoop.has(jid)) {
-              seenIdsThisLoop.add(jid);
-              cards.push(c);
-            }
-          } else {
-            cards.push(c);
-          }
-        }
-
-        if (cards.length === 0) {
+        // Check if list container exists; if not, wait briefly
+        const listCheck = document.querySelector('.jobs-search-results-list, .scaffold-layout__list-container, div[data-view-name="job-search-results-list"]');
+        if (!listCheck) {
           emptyWaitCount++;
-          // If unexpectedly landed on /jobs/view/ inside crawl loop, redirect immediately
-          if (window.location.pathname.includes('/jobs/view')) {
-            log('⚠️ Detected standalone job view page (/jobs/view/). Redirecting back to search results...', 'warning');
-            updateFloatingPill('Redirecting to search page...');
-            const currentQuery = session.queryQueue?.[session.currentQueryIndex] || settings.targetJobQuery || profile.work?.targetRole?.jobTitle || 'Data Analyst';
-            const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
-            chrome.runtime.sendMessage({ action: 'REDIRECT_TO_SEARCH' }).catch(() => {});
-            await sleep(1500);
-            window.location.href = searchUrl;
-            return;
-          }
-
           if (emptyWaitCount <= 3) {
-            log(`Waiting for LinkedIn job listings to load (${emptyWaitCount}/3)...`, 'info');
+            log(`Waiting for LinkedIn job search results to appear (${emptyWaitCount}/3)...`, 'info');
             await sleep(2500);
             continue;
           }
-
-          log('⚠️ No job listings found after multiple attempts. Checking next steps...', 'warning');
+          log('⚠️ No search list container found after 3 attempts. Checking next steps...', 'warning');
           const hasNext = await navigateToNextPage();
           if (!hasNext) {
             log('No further pages found for current search query.', 'info');
@@ -968,32 +1116,10 @@
 
         emptyWaitCount = 0;
 
-        for (const card of cards) {
-          if (isHalted) break;
+        log(`📄 Crawling search results Page ${currentPageNumber}...`, 'info');
+        updateFloatingPill(`📄 Crawling Page ${currentPageNumber}...`);
 
-          const freshData = await chrome.storage.local.get(['autoApplySession']);
-          if (!freshData.autoApplySession?.isRunning) {
-            isHalted = true;
-            break;
-          }
-
-          const freshStats = freshData.autoApplySession?.stats || {};
-          if (maxJobs > 0 && (freshStats.applied || 0) + (freshStats.saved || 0) >= maxJobs) {
-            isHalted = true;
-            break;
-          }
-
-          try {
-            const status = await processJobCard(card, profile, settings);
-            if (status !== 'already_processed') {
-              await humanDelay(settings.stepDelayMs || 1000);
-            }
-          } catch (cardErr) {
-            log(`⚠️ Error evaluating card: ${cardErr.message}. Skipping to next job...`, 'warning');
-            chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'unrecognized' } }).catch(() => {});
-            try { card.style.outline = ''; } catch (_) {}
-          }
-        }
+        const scannedOnPage = await crawlCurrentPage(profile, settings, maxJobs, currentPageNumber);
 
         if (isHalted) break;
 
@@ -1004,6 +1130,9 @@
           chrome.runtime.sendMessage({ action: 'QUERY_RESULTS_FINISHED', summary: finalData.autoApplySession?.stats }).catch(() => {});
           break;
         }
+
+        currentPageNumber++;
+        await sleep(2000);
       }
     } catch (err) {
       log(`Error in crawl loop: ${err.message}`, 'error');
