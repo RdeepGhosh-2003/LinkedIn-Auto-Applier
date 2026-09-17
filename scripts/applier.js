@@ -118,12 +118,47 @@
     if (!el) return;
     try {
       el.focus();
-      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      el.click();
+      const mouseEventInit = { bubbles: true, cancelable: true, view: window };
+      el.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
+      el.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
+
+      // If the target is an anchor tag or nested within an anchor tag,
+      // prevent browser default link navigation so it does not pull the tab away from /jobs/search/
+      const isAnchor = el.tagName === 'A' || el.closest('a');
+      const clickEvent = new MouseEvent('click', mouseEventInit);
+      if (isAnchor) {
+        clickEvent.preventDefault();
+      }
+      el.dispatchEvent(clickEvent);
+
+      // Only execute native .click() for non-anchor elements (buttons, inputs, divs)
+      if (!isAnchor) {
+        el.click();
+      }
     } catch (_) {
-      el.click();
+      if (el.tagName !== 'A' && !el.closest('a')) {
+        try { el.click(); } catch (e) {}
+      }
     }
+  }
+
+  function buildLinkedInSearchUrl(queryStr, settings = {}) {
+    const query = queryStr || 'Data Analyst';
+    const location = settings.targetLocation || 'Bengaluru, Karnataka, India';
+    const dateFilter = settings.dateFilter || 'r86400';
+    const sortBy = settings.sortBy || 'DD';
+
+    let url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}`;
+    if (dateFilter && dateFilter !== 'any') {
+      url += `&f_TPR=${encodeURIComponent(dateFilter)}`;
+    }
+    if (sortBy) {
+      url += `&sortBy=${encodeURIComponent(sortBy)}`;
+    }
+    if (settings.easyApplyOnly || settings.dualStrategy === false) {
+      url += `&f_AL=true`;
+    }
+    return url;
   }
 
   function parseExperienceRequirement(title = '', description = '', badges = '') {
@@ -155,7 +190,7 @@
     }
 
     // 3. Senior role title hints
-    if (/\b(senior|sr\.|lead|manager|principal|architect|director|head of)\b/i.test(title)) {
+    if (/\b(senior|sr\.|lead|manager|principal|architect|director|head of|vp|vice president)\b/i.test(title)) {
       if (!/\b(executive|assistant|junior|jr\.|trainee|associate)\b/i.test(title)) {
         return 4;
       }
@@ -499,8 +534,8 @@
     const originalOutline = card.style.outline;
     card.style.outline = '2px solid #0a66c2';
 
-    // Click card to load right-side details
-    const clickable = card.querySelector('a.job-card-list__title--link, a.job-card-container__link, a[data-control-name="job_card_click"]') || card;
+    // Click card container or lockup element to load right-side details without triggering <a> full-page navigation
+    const clickable = card.querySelector('.job-card-container, .job-card-list__entity-lockup, div[data-job-id], .artdeco-entity-lockup') || card;
     triggerClick(clickable);
 
     // Wait for details pane
@@ -665,11 +700,14 @@
       return 'skipped_salary';
     }
 
-    // 2. Seniority Tag Check (LinkedIn official badge)
+    // 2. Seniority Tag Check (LinkedIn official badge & Title level)
     const lowerBadge = badgeText.toLowerCase();
-    if (lowerBadge.includes('mid-senior') || lowerBadge.includes('director') || lowerBadge.includes('executive')) {
+    const isSeniorBadge = lowerBadge.includes('mid-senior') || lowerBadge.includes('director') || lowerBadge.includes('executive');
+    const isSeniorTitle = /\b(director|head of|vp|vice president)\b/i.test(jobTitle);
+    if (isSeniorBadge || isSeniorTitle) {
       if (!/\b(junior|jr\.|trainee|associate)\b/i.test(jobTitle)) {
-        log(`⏭️ Skipped: "${jobTitle}" has senior LinkedIn level (${badgeText}).`, 'info');
+        const reasonDetail = isSeniorTitle ? 'Executive / VP title' : badgeText;
+        log(`⏭️ Skipped: "${jobTitle}" has senior LinkedIn level (${reasonDetail}).`, 'info');
         chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'senior' } }).catch(() => {});
         card.style.outline = originalOutline;
         return 'skipped_senior_badge';
@@ -840,6 +878,20 @@
       const settings = session.settings || profile.autoApplierSettings || {};
       const maxJobs = settings.maxJobsPerSession || 0; // 0 = uncapped
 
+      // Guard: If currently on a standalone /jobs/view/ page, redirect back to search results
+      if (window.location.pathname.includes('/jobs/view')) {
+        log('⚠️ Detected standalone job view page (/jobs/view/). Redirecting back to search results...', 'warning');
+        updateFloatingPill('Redirecting to search page...');
+        const currentQuery = session.queryQueue?.[session.currentQueryIndex] || settings.targetJobQuery || profile.work?.targetRole?.jobTitle || 'Data Analyst';
+        const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
+        chrome.runtime.sendMessage({ action: 'REDIRECT_TO_SEARCH' }).catch(() => {});
+        await sleep(1500);
+        window.location.href = searchUrl;
+        return;
+      }
+
+      let emptyWaitCount = 0;
+
       while (!isHalted) {
         const currentData = await chrome.storage.local.get(['autoApplySession']);
         const currentStats = currentData.autoApplySession?.stats || { scanned: 0, applied: 0, saved: 0, skipped: 0 };
@@ -883,10 +935,38 @@
         }
 
         if (cards.length === 0) {
-          log('Waiting for LinkedIn job listings to load...', 'warning');
-          await sleep(3000);
+          emptyWaitCount++;
+          // If unexpectedly landed on /jobs/view/ inside crawl loop, redirect immediately
+          if (window.location.pathname.includes('/jobs/view')) {
+            log('⚠️ Detected standalone job view page (/jobs/view/). Redirecting back to search results...', 'warning');
+            updateFloatingPill('Redirecting to search page...');
+            const currentQuery = session.queryQueue?.[session.currentQueryIndex] || settings.targetJobQuery || profile.work?.targetRole?.jobTitle || 'Data Analyst';
+            const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
+            chrome.runtime.sendMessage({ action: 'REDIRECT_TO_SEARCH' }).catch(() => {});
+            await sleep(1500);
+            window.location.href = searchUrl;
+            return;
+          }
+
+          if (emptyWaitCount <= 3) {
+            log(`Waiting for LinkedIn job listings to load (${emptyWaitCount}/3)...`, 'info');
+            await sleep(2500);
+            continue;
+          }
+
+          log('⚠️ No job listings found after multiple attempts. Checking next steps...', 'warning');
+          const hasNext = await navigateToNextPage();
+          if (!hasNext) {
+            log('No further pages found for current search query.', 'info');
+            const finalData = await chrome.storage.local.get(['autoApplySession']);
+            chrome.runtime.sendMessage({ action: 'QUERY_RESULTS_FINISHED', summary: finalData.autoApplySession?.stats }).catch(() => {});
+            break;
+          }
+          emptyWaitCount = 0;
           continue;
         }
+
+        emptyWaitCount = 0;
 
         for (const card of cards) {
           if (isHalted) break;

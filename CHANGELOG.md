@@ -1,4 +1,4 @@
-﻿# 📜 LinkedIn Auto-Applier — Official Changelog & Release Ledger
+# 📜 LinkedIn Auto-Applier — Official Changelog & Release Ledger
 
 This document serves as the permanent chronological reference for all updates, features, architectural decisions, and bug fixes implemented in the **LinkedIn Auto-Applier** browser extension.
 
@@ -8,6 +8,7 @@ This document serves as the permanent chronological reference for all updates, f
 
 | Version | Date & Timestamp | Type | Key Highlights |
 |---|---|---|---|
+| **`v1.1.5`** | 2026-09-17 21:30 IST | **Navigation Guard & Infinite Loop Fix** | Prevented full-page browser navigation to `/jobs/view/` by targeting card containers instead of `<a>` anchor tags; added `event.preventDefault()` guard in `triggerClick`; implemented standalone job page auto-detection with self-healing redirect to search query; eliminated infinite "Waiting for LinkedIn job listings to load..." loop; prioritized active LinkedIn window tab in background launcher; added VP/Executive title skip detection. |
 | **`v1.1.4`** | 2026-09-11 23:55 IST | **Calculation Fix & Concurrency Mutex** | Resolved asynchronous storage race condition that caused Scanned metric drift; eliminated separate premature `scanned: 1` messages in favor of atomic updates; introduced Promise queue mutex for background storage writes; added `already_applied` category; made drop-off card scrollable (`max-height: 185px; overflow-y: auto`) to prevent clipped bars; added automated self-healing reconciliation for past records. |
 | **`v1.1.3`** | 2026-09-11 17:05 IST | **Location Matcher Upgrade** | Enabled countrywide matching for `targetLocation: "India"` / `"All India"` so Indian tech hub cities (Bengaluru, Pune, Mumbai, Delhi NCR, Hyderabad) are not falsely skipped; added Delhi/NCR/Gurgaon/Gurugram/Noida bidirectional alias resolution. |
 | **`v1.1.2`** | 2026-09-11 16:50 IST | **Core Accounting & Opportunity Protection** | Auto-saves incomplete LinkedIn Easy Apply applications to Saved Jobs with reason `⚠️ Incomplete: [Reason]`; ensures `Scanned = Applied + Saved + Skipped` is always 100% mathematically balanced; styles manual-review jobs with prominent coral badge in Saved tab. |
@@ -18,6 +19,18 @@ This document serves as the permanent chronological reference for all updates, f
 ---
 
 ## 🔍 Detailed Version Records
+
+### `v1.1.5` — Navigation Guard, Infinite Loop Prevention & Tab Targeting
+- **Date**: September 17, 2026 (21:30 IST)
+- **Commits**: `fix(crawler): prevent full-page navigation on card click, auto-redirect standalone /jobs/view/ pages, eliminate infinite wait loop, prioritize active tab`
+- **Files Modified**: `scripts/applier.js`, `scripts/background.js`, `manifest.json`, `CHANGELOG.md`.
+- **What Was Added / Updated:**
+  1. **🛡️ <a> Anchor Navigation Shield**: Refactored card inspection click targeting. Instead of clicking anchor elements (`a.job-card-list__title--link`) which triggered the browser's native URL navigation to `/jobs/view/<id>`, the crawler now selects the card container (`.job-card-container`, `.job-card-list__entity-lockup`).
+  2. **🛑 Synthetic `triggerClick` Guard**: Enhanced `triggerClick` to detect anchor tags and call `event.preventDefault()`, strictly prohibiting native tab navigation away from `/jobs/search/` while permitting LinkedIn's single-page app framework to update the right-side details panel.
+  3. **🩹 Standalone Page Auto-Detection & Recovery**: If the extension finds itself on a standalone `/jobs/view/<id>` page (e.g. from manual navigation or deep links), it automatically detects `window.location.pathname.includes('/jobs/view')`, logs an explanatory notice, and smoothly re-navigates the tab back to the active search query.
+  4. **🔄 Infinite Wait Loop Elimination**: Replaced the unbounded `cards.length === 0` loop with an `emptyWaitCount` retry counter. If cards are missing for 3 checks (7.5s), it gracefully attempts next page navigation or queue progression instead of hanging indefinitely.
+  5. **🎯 Active Tab Prioritization**: `background.js` now inspects the current window's active tab first (`chrome.tabs.query({ active: true, currentWindow: true })`). If a LinkedIn tab is already focused, it targets that exact tab rather than an arbitrary background LinkedIn tab.
+  6. **👔 Vice President (VP) Role Filtering**: Added `vp` and `vice president` regex matching to both `parseExperienceRequirement` and the Seniority Tag evaluator, ensuring executive and VP level roles are cleanly classified and filtered.
 
 ### `v1.1.4` — Calculation Fix, Concurrency Mutex & Drop-Off Card Scroll
 - **Date**: September 11, 2026 (23:55 IST)

@@ -227,16 +227,24 @@ async function handleStartAutoApply(customSettings) {
 
   await appendSessionLog(`🚀 Auto-Apply launched for ${queueLabel} in "${settings.targetLocation || 'Bengaluru'}" (Filter: Last 24 Hours)`, 'info');
 
-  const tabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+  const [currentActive] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const isCurrentActiveLinkedIn = currentActive?.url && currentActive.url.includes('linkedin.com');
   let targetTab = null;
 
-  if (tabs.length > 0) {
-    targetTab = tabs[0];
+  if (isCurrentActiveLinkedIn) {
+    targetTab = currentActive;
     await chrome.tabs.update(targetTab.id, { url: searchUrl, active: true });
-    await appendSessionLog(`Navigating existing LinkedIn tab #${targetTab.id}...`, 'info');
+    await appendSessionLog(`Navigating active LinkedIn tab #${targetTab.id}...`, 'info');
   } else {
-    targetTab = await chrome.tabs.create({ url: searchUrl, active: true });
-    await appendSessionLog(`Opened new LinkedIn tab #${targetTab.id}...`, 'info');
+    const tabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
+    if (tabs.length > 0) {
+      targetTab = tabs[0];
+      await chrome.tabs.update(targetTab.id, { url: searchUrl, active: true });
+      await appendSessionLog(`Navigating existing LinkedIn tab #${targetTab.id}...`, 'info');
+    } else {
+      targetTab = await chrome.tabs.create({ url: searchUrl, active: true });
+      await appendSessionLog(`Opened new LinkedIn tab #${targetTab.id}...`, 'info');
+    }
   }
 
   const sessionId = 'sess_' + Date.now();
@@ -604,6 +612,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleSessionCompleted(request.summary);
     sendResponse({ status: 'ok' });
+    return true;
+  }
+
+  if (request.action === 'REDIRECT_TO_SEARCH') {
+    chrome.storage.local.get(['autoApplySession'], async (data) => {
+      const session = data?.autoApplySession;
+      if (session && session.isRunning) {
+        const currentQuery = session.queryQueue?.[session.currentQueryIndex] || session.settings?.targetJobQuery || 'Data Analyst';
+        const searchUrl = buildLinkedInSearchUrl(currentQuery, session.settings);
+        await appendSessionLog(`ℹ️ Standalone job page detected. Redirecting tab back to search: "${currentQuery}"`, 'warning');
+        const tabId = sender.tab?.id || session.tabId;
+        if (tabId) {
+          chrome.tabs.update(tabId, { url: searchUrl, active: true }).catch(() => {});
+        }
+      }
+      sendResponse({ status: 'redirecting' });
+    });
     return true;
   }
 
