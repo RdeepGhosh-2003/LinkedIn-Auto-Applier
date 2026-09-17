@@ -511,31 +511,38 @@
   }
 
   function getJobListContainer() {
-    const selectors = [
-      '.jobs-search-results-list',
-      '.scaffold-layout__list-container',
-      '.jobs-search-results-list__list',
-      '.scaffold-layout__list',
-      'div[data-view-name="job-search-results-list"]'
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el && (el.scrollHeight > el.clientHeight || el.scrollTop > 0)) {
-        return el;
-      }
-    }
-    const sample = document.querySelector('.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item');
+    // 1. Traverse up from any rendered job card to find the true scrollable container
+    const sample = document.querySelector('div.job-card-container, li.jobs-search-results__list-item, div[data-job-id], [data-occludable-job-id]');
     if (sample) {
       let p = sample.parentElement;
-      while (p && p !== document.body) {
-        const style = window.getComputedStyle(p);
-        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && p.scrollHeight > p.clientHeight) {
-          return p;
+      while (p && p !== document.body && p !== document.documentElement) {
+        if (p.scrollHeight > p.clientHeight && p.clientHeight > 200) {
+          const style = window.getComputedStyle(p);
+          const oy = style.overflowY;
+          if (oy === 'auto' || oy === 'scroll' || p.classList.contains('scaffold-layout__list') || p.classList.contains('jobs-search-results-list')) {
+            return p;
+          }
         }
         p = p.parentElement;
       }
     }
-    return document.querySelector('.jobs-search-results-list') || window;
+
+    // 2. Comprehensive selector list for LinkedIn's left-rail layout
+    const selectors = [
+      '.scaffold-layout__list',
+      '.scaffold-layout__list-container',
+      '.jobs-search-results-list',
+      '.jobs-search-results-list__list',
+      'div[data-view-name*="search-results"]',
+      'div[class*="jobs-search-results"]',
+      'div[class*="scaffold-layout__list"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+
+    return window;
   }
 
   async function processJobCard(card, profile, settings) {
@@ -935,7 +942,7 @@
 
       // 2. Query all job cards currently rendered in DOM
       const rawCards = Array.from(document.querySelectorAll(
-        '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item'
+        '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item, [data-occludable-job-id]'
       )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
 
       // 3. Find cards not yet processed on this page
@@ -985,9 +992,10 @@
       if (isHalted) break;
 
       // 5. Check if bottom of container has been reached
+      const activeContainer = getJobListContainer();
       let isAtBottom = false;
-      if (listContainer && listContainer.scrollHeight > listContainer.clientHeight) {
-        isAtBottom = (listContainer.scrollTop + listContainer.clientHeight) >= (listContainer.scrollHeight - 60);
+      if (activeContainer && activeContainer.scrollHeight > activeContainer.clientHeight) {
+        isAtBottom = (activeContainer.scrollTop + activeContainer.clientHeight) >= (activeContainer.scrollHeight - 60);
       }
 
       // If at bottom and no new cards appeared after 2 scroll checks, page is fully crawled!
@@ -997,20 +1005,27 @@
 
       // 6. Scroll down the list container to trigger lazy rendering of next card chunk
       scrollCycles++;
-      const prevScroll = listContainer.scrollTop || 0;
-      if (listContainer && listContainer.scrollBy) {
-        listContainer.scrollBy({ top: 550, behavior: 'smooth' });
-      } else if (listContainer && listContainer.scrollTop !== undefined) {
-        listContainer.scrollTop += 550;
+      const prevScroll = activeContainer && activeContainer.scrollTop ? activeContainer.scrollTop : 0;
+      if (activeContainer && activeContainer.scrollBy) {
+        activeContainer.scrollBy({ top: 550, behavior: 'smooth' });
+      } else if (activeContainer && activeContainer.scrollTop !== undefined) {
+        activeContainer.scrollTop += 550;
       } else if (window.scrollBy) {
         window.scrollBy(0, 550);
       }
 
+      // Also scroll the last visible card into view to trigger lazy loading
+      if (rawCards.length > 0) {
+        try {
+          rawCards[rawCards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } catch (_) {}
+      }
+
       // Allow LinkedIn Ember/React virtual list time to render next cards
-      await sleep(750);
+      await sleep(800);
 
       // If scroll didn't move (reached end of scrollable area)
-      if (listContainer.scrollTop === prevScroll && unprocessed.length === 0) {
+      if (activeContainer && activeContainer.scrollTop === prevScroll && unprocessed.length === 0) {
         consecutiveNoNewCards++;
         if (consecutiveNoNewCards >= 2) break;
       }
@@ -1093,16 +1108,19 @@
           return;
         }
 
-        // Check if list container exists; if not, wait briefly
-        const listCheck = document.querySelector('.jobs-search-results-list, .scaffold-layout__list-container, div[data-view-name="job-search-results-list"]');
-        if (!listCheck) {
+        // Check if job listings have rendered on the page
+        const existingCards = Array.from(document.querySelectorAll(
+          '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item, [data-occludable-job-id]'
+        )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
+
+        if (existingCards.length === 0) {
           emptyWaitCount++;
           if (emptyWaitCount <= 3) {
-            log(`Waiting for LinkedIn job search results to appear (${emptyWaitCount}/3)...`, 'info');
+            log(`Waiting for LinkedIn job listings to load (${emptyWaitCount}/3)...`, 'info');
             await sleep(2500);
             continue;
           }
-          log('⚠️ No search list container found after 3 attempts. Checking next steps...', 'warning');
+          log('⚠️ No job listings found on this page after 3 attempts. Checking next steps...', 'warning');
           const hasNext = await navigateToNextPage();
           if (!hasNext) {
             log('No further pages found for current search query.', 'info');

@@ -8,6 +8,7 @@ This document serves as the permanent chronological reference for all updates, f
 
 | Version | Date & Timestamp | Type | Key Highlights |
 |---|---|---|---|
+| **`v1.1.7`** | 2026-09-17 22:30 IST | **Elimination of Flawed Container Pre-Check** | Removed fragile `listCheck` querySelector that looked for 3 hardcoded container class names, which caused the crawler to falsely report "No search list container found after 3 attempts" and prematurely skip from page 1 to 2 to 3; replaced with direct DOM card detection (`div.job-card-container`, `div[data-job-id]`, `[data-occludable-job-id]`); enhanced `getJobListContainer()` with parent element traversal from rendered cards; synchronized container scrolling with `card.scrollIntoView()`. |
 | **`v1.1.6`** | 2026-09-17 21:45 IST | **Progressive Lazy-Load Page Scanning** | Fixed critical virtualized scrolling issue where the crawler only evaluated the initial 6–7 visible cards per page before prematurely clicking Next; implemented `crawlCurrentPage()` progressive scroll loop that traverses the container down chunk by chunk, loading and processing all ~25 jobs per page; added dynamic `getJobListContainer()` resolver and pagination fallback selector; guaranteed full 100% scanning coverage across all pages (e.g. all 332 results across 14 pages). |
 | **`v1.1.5`** | 2026-09-17 21:30 IST | **Navigation Guard & Infinite Loop Fix** | Prevented full-page browser navigation to `/jobs/view/` by targeting card containers instead of `<a>` anchor tags; added `event.preventDefault()` guard in `triggerClick`; implemented standalone job page auto-detection with self-healing redirect to search query; eliminated infinite "Waiting for LinkedIn job listings to load..." loop; prioritized active LinkedIn window tab in background launcher; added VP/Executive title skip detection. |
 | **`v1.1.4`** | 2026-09-11 23:55 IST | **Calculation Fix & Concurrency Mutex** | Resolved asynchronous storage race condition that caused Scanned metric drift; eliminated separate premature `scanned: 1` messages in favor of atomic updates; introduced Promise queue mutex for background storage writes; added `already_applied` category; made drop-off card scrollable (`max-height: 185px; overflow-y: auto`) to prevent clipped bars; added automated self-healing reconciliation for past records. |
@@ -20,6 +21,16 @@ This document serves as the permanent chronological reference for all updates, f
 ---
 
 ## 🔍 Detailed Version Records
+
+### `v1.1.7` — Elimination of Container Pre-Check & Direct Card Detection
+- **Date**: September 17, 2026 (22:30 IST)
+- **Commits**: `fix(crawler): v1.1.7 - eliminate fragile listCheck pre-check, detect job cards directly, traverse scroll parent from card`
+- **Files Modified**: `scripts/applier.js`, `manifest.json`, `CHANGELOG.md`.
+- **What Was Added / Updated:**
+  1. **🚫 Removal of Flawed `listCheck` Pre-Check**: Completely removed the hardcoded `listCheck` querySelector (`.jobs-search-results-list, .scaffold-layout__list-container, div[data-view-name="job-search-results-list"]`). If LinkedIn used slightly different wrapper classes, `listCheck` evaluated to `null`, logged `"No search list container found after 3 attempts"`, and prematurely jumped across pages 1 $\rightarrow$ 2 $\rightarrow$ 3 without scanning cards.
+  2. **🃏 Direct Card Presence Verification**: Replaced container pre-checking with direct DOM card detection (`div.job-card-container`, `div[data-job-id]`, `[data-occludable-job-id]`, `li.jobs-search-results__list-item`). As long as job cards are visible on the screen, the crawler immediately begins scanning.
+  3. **🧬 Ancestor Traversal Container Discovery**: `getJobListContainer()` now inspects any visible card and traverses upward through its parent chain to find the true scrolling ancestor (`scrollHeight > clientHeight && clientHeight > 200`), ensuring 100% compatibility with all past, present, and future LinkedIn layouts.
+  4. **🔄 Dual-Action Scroll Sync**: During chunk-by-chunk scrolling, both the scrollable container and the last visible card (`lastCard.scrollIntoView({ block: 'end' })`) are triggered simultaneously, guaranteeing LinkedIn's virtual list observer renders the next batch of cards.
 
 ### `v1.1.6` — Progressive Lazy-Load Page Scanning & Full Page Coverage
 - **Date**: September 17, 2026 (21:45 IST)
