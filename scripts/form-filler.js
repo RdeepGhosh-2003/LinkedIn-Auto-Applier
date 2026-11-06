@@ -143,6 +143,18 @@
     return false;
   }
 
+  function isVisible(el) {
+    if (!el) return false;
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+      if (el.offsetWidth > 0 || el.offsetHeight > 0) return true;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return true;
+    } catch (_) {}
+    return false;
+  }
+
   const FormFiller = {
     getModal(documentRef = document) {
       const doc = documentRef || document;
@@ -155,7 +167,7 @@
 
       const dialogs = Array.from(doc.querySelectorAll('div.artdeco-modal[role="dialog"], div[role="dialog"]'));
       for (const d of dialogs) {
-        if (d.offsetWidth > 0 && d.offsetHeight > 0) {
+        if (isVisible(d)) {
           const hasEasyApplyContent = d.querySelector(
             '.jobs-easy-apply-content, [data-easy-apply-next-button], .jobs-easy-apply-form-section, .jobs-easy-apply-footer, button[aria-label*="Submit application" i], button[aria-label*="Continue to next step" i]'
           );
@@ -182,7 +194,7 @@
       ];
       for (const sel of captchaSelectors) {
         const el = doc.querySelector(sel);
-        if (el && el.offsetWidth > 0 && el.offsetHeight > 0) return true;
+        if (el && isVisible(el)) return true;
       }
       return false;
     },
@@ -232,7 +244,7 @@
       }
 
       // Check for any visible button with text "Done"
-      const allButtons = Array.from(doc.querySelectorAll('div[role="dialog"] button')).filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      const allButtons = Array.from(doc.querySelectorAll('div[role="dialog"] button')).filter(b => isVisible(b));
       const textDone = allButtons.find(b => (b.textContent || '').trim().toLowerCase() === 'done');
       if (textDone) {
         dispatchReactClick(textDone);
@@ -425,21 +437,21 @@
 
     findActionButtons(modalEl) {
       if (!modalEl) return { btnNext: null, btnReview: null, btnSubmit: null };
-      const isVisible = (b) => b && b.offsetWidth > 0 && b.offsetHeight > 0 && !b.disabled;
+      const isActionBtnVisible = (b) => b && isVisible(b) && !b.disabled;
 
       let btnNext = modalEl.querySelector('button[data-easy-apply-next-button], button[aria-label*="Continue to next step" i], button[aria-label*="Next" i], #btn-next');
       let btnReview = modalEl.querySelector('button[aria-label*="Review your application" i], button[aria-label*="Review" i], #btn-review');
       let btnSubmit = modalEl.querySelector('button[aria-label*="Submit application" i], #btn-submit');
 
-      if (btnNext && !isVisible(btnNext)) btnNext = null;
-      if (btnReview && !isVisible(btnReview)) btnReview = null;
-      if (btnSubmit && !isVisible(btnSubmit)) btnSubmit = null;
+      if (btnNext && !isActionBtnVisible(btnNext)) btnNext = null;
+      if (btnReview && !isActionBtnVisible(btnReview)) btnReview = null;
+      if (btnSubmit && !isActionBtnVisible(btnSubmit)) btnSubmit = null;
 
       if (btnNext || btnReview || btnSubmit) {
         return { btnNext, btnReview, btnSubmit };
       }
 
-      const allButtons = Array.from(modalEl.querySelectorAll('button')).filter(isVisible);
+      const allButtons = Array.from(modalEl.querySelectorAll('button')).filter(isActionBtnVisible);
       for (const btn of allButtons) {
         const text = `${btn.innerText || btn.textContent || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase().trim();
         if (text.includes('back') || text.includes('previous') || text.includes('cancel') || text.includes('dismiss') || text.includes('discard') || text.includes('close')) continue;

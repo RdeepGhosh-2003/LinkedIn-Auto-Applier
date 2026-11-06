@@ -63,6 +63,37 @@
     return sleep(Math.max(600, baseMs + jitter));
   }
 
+  function isElementVisible(el) {
+    if (!el) return false;
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+      }
+      if (style.display === 'contents') {
+        const child = el.querySelector('a, button, div, span') || el.firstElementChild;
+        return child ? isElementVisible(child) : true;
+      }
+      if (el.offsetWidth > 0 || el.offsetHeight > 0) return true;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return true;
+      const clientRects = el.getClientRects();
+      if (clientRects && clientRects.length > 0 && clientRects[0].width > 0) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function isInsideDetailsPaneOrNav(el) {
+    if (!el) return false;
+    try {
+      return Boolean(el.closest(
+        '.scaffold-layout__detail, [data-view-name="job-details"], #job-details, .jobs-description__content, .jobs-search__job-details, div.job-view-layout, .jobs-details__main-content, .job-details-jobs-unified-top-card, header, nav, footer'
+      ));
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Synthesize pleasant two-tone chime via Web Audio API (offline, zero assets)
   function playAudioChime() {
     try {
@@ -251,7 +282,7 @@
     for (const sel of easyApplySelectors) {
       try {
         const btn = scope.querySelector(sel) || document.querySelector(`.scaffold-layout__detail ${sel}`);
-        if (btn && btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+        if (btn && isElementVisible(btn)) {
           const txt = `${btn.textContent || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase();
           if (txt.includes('easy apply')) {
             return { type: 'easy_apply', element: btn };
@@ -261,7 +292,7 @@
     }
 
     // 2. Check all visible buttons in the details pane
-    const allButtons = Array.from(scope.querySelectorAll('button, a')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+    const allButtons = Array.from(scope.querySelectorAll('button, a')).filter(el => isElementVisible(el));
     const textEasyApply = allButtons.find(b => {
       const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase().trim();
       return t.includes('easy apply');
@@ -271,7 +302,7 @@
     }
 
     // 3. Document-wide fallback for Easy Apply button
-    const docButtons = Array.from(document.querySelectorAll('.scaffold-layout__detail button, main button')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+    const docButtons = Array.from(document.querySelectorAll('.scaffold-layout__detail button, main button')).filter(el => isElementVisible(el));
     const docEasyApply = docButtons.find(b => {
       const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase().trim();
       return t.includes('easy apply');
@@ -296,7 +327,7 @@
       if (cardText.includes('easy apply')) {
         const anyEasyBtn = Array.from(document.querySelectorAll('button')).find(b => {
           const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase();
-          return t.includes('easy apply') && b.offsetWidth > 0;
+          return t.includes('easy apply') && isElementVisible(b);
         });
         if (anyEasyBtn) {
           return { type: 'easy_apply', element: anyEasyBtn };
@@ -325,7 +356,7 @@
     for (const sel of selectors) {
       try {
         const el = container.querySelector(sel);
-        if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+        if (el && isElementVisible(el)) {
           saveBtn = el;
           break;
         }
@@ -333,7 +364,7 @@
     }
 
     if (!saveBtn) {
-      const allButtons = Array.from(container.querySelectorAll('button')).filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      const allButtons = Array.from(container.querySelectorAll('button')).filter(b => isElementVisible(b));
       saveBtn = allButtons.find(b => {
         const txt = (b.innerText || b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
         const aria = (b.getAttribute('aria-label') || '').toLowerCase();
@@ -370,7 +401,7 @@
     let jobTitle = '';
     if (card) {
       const cardTitleEl = card.querySelector(
-        'a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [class*="job-card-list__title"], strong'
+        'a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [class*="job-card-list__title"], [class*="job-title"], strong, h3, h2, a[href*="/jobs/view/"], a[href*="currentJobId="]'
       );
       if (cardTitleEl && cardTitleEl.textContent.trim()) {
         jobTitle = cardTitleEl.textContent.trim();
@@ -392,7 +423,7 @@
     let company = '';
     if (card) {
       const cardComp = card.querySelector(
-        '.job-card-container__primary-description, .job-card-container__company-name, [class*="company-name"], [class*="primary-description"]'
+        '.job-card-container__primary-description, .job-card-container__company-name, [class*="company-name"], [class*="primary-description"], .artdeco-entity-lockup__subtitle, [class*="subtitle"]'
       );
       if (cardComp && cardComp.textContent.trim()) {
         company = cardComp.textContent.trim();
@@ -412,7 +443,7 @@
     let location = '';
     if (card) {
       const cardLoc = card.querySelector(
-        '.job-card-container__metadata-item, .job-card-list__location, [class*="metadata-item"], [class*="job-card-container__metadata"]'
+        '.job-card-container__metadata-item, .job-card-list__location, [class*="metadata-item"], [class*="job-card-container__metadata"], .artdeco-entity-lockup__caption, [class*="caption"]'
       );
       if (cardLoc && cardLoc.textContent.trim()) {
         location = cardLoc.textContent.trim();
@@ -599,12 +630,44 @@
 
   function extractCardJobId(card) {
     if (!card) return null;
-    return card.getAttribute('data-job-id') ||
-           card.getAttribute('data-occludable-job-id') ||
-           card.querySelector('[data-job-id]')?.getAttribute('data-job-id') ||
-           card.querySelector('a[href*="/jobs/view/"]')?.href?.match(/\/jobs\/view\/(\d+)/)?.[1] ||
-           card.querySelector('a[href*="currentJobId="]')?.href?.match(/currentJobId=(\d+)/)?.[1] ||
-           null;
+    try {
+      // 1. Direct attributes on card
+      const rawAttrs = [
+        card.getAttribute('data-job-id'),
+        card.getAttribute('data-occludable-job-id'),
+        card.getAttribute('data-entity-urn'),
+        card.getAttribute('id')
+      ];
+      for (const attr of rawAttrs) {
+        if (attr) {
+          const m = attr.match(/\d{6,14}/);
+          if (m) return m[0];
+        }
+      }
+
+      // 2. Child attributes
+      const childWithAttr = card.querySelector('[data-job-id], [data-occludable-job-id], [data-entity-urn]');
+      if (childWithAttr) {
+        const childAttr = childWithAttr.getAttribute('data-job-id') ||
+                          childWithAttr.getAttribute('data-occludable-job-id') ||
+                          childWithAttr.getAttribute('data-entity-urn');
+        if (childAttr) {
+          const m = childAttr.match(/\d{6,14}/);
+          if (m) return m[0];
+        }
+      }
+
+      // 3. Links inside card or card itself
+      const links = card.tagName === 'A' ? [card] : Array.from(card.querySelectorAll('a[href]'));
+      for (const a of links) {
+        const href = a.getAttribute('href') || a.href || '';
+        const m1 = href.match(/\/jobs\/view\/(\d{6,14})/);
+        if (m1) return m1[1];
+        const m2 = href.match(/currentJobId=(\d{6,14})/);
+        if (m2) return m2[1];
+      }
+    } catch (_) {}
+    return null;
   }
 
   function getJobListContainer() {
@@ -624,11 +687,11 @@
       if (el && el.scrollHeight > el.clientHeight && el.clientHeight > 150) return el;
     }
 
-    // 2. Traverse up from any rendered job card to find the true scrollable container
+    // 2. Traverse up from any rendered job card or anchor to find the true scrollable container
     const sample = document.querySelector(
-      'ul.scaffold-layout__list-container > li, div.job-card-container, li.jobs-search-results__list-item, div[data-job-id], [data-occludable-job-id]'
+      'ul.scaffold-layout__list-container > li, div.job-card-container, li.jobs-search-results__list-item, div[data-job-id], [data-occludable-job-id], a[href*="/jobs/view/"], a[href*="currentJobId="]'
     );
-    if (sample) {
+    if (sample && !isInsideDetailsPaneOrNav(sample)) {
       let p = sample.parentElement;
       while (p && p !== document.body && p !== document.documentElement) {
         if (p.scrollHeight > p.clientHeight && p.clientHeight > 150) {
@@ -651,6 +714,38 @@
   }
 
   function getRenderedJobCards() {
+    const deduped = [];
+    const seenJobIds = new Set();
+
+    function tryAddCard(cardEl) {
+      if (!cardEl || isInsideDetailsPaneOrNav(cardEl)) return;
+      if (!isElementVisible(cardEl)) return;
+
+      const jid = extractCardJobId(cardEl);
+      const key = jid ? `id_${jid}` : (cardEl.innerText?.slice(0, 60).trim() || '');
+      if (key && !seenJobIds.has(key)) {
+        seenJobIds.add(key);
+        deduped.push(cardEl);
+      }
+    }
+
+    // Tier 1: Invariant Job Link Discovery
+    // Every single job card rendered in the search results left rail contains an anchor pointing to the job
+    const candidateLinks = Array.from(document.querySelectorAll(
+      'a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link, a[data-control-name="job_card_click"]'
+    ));
+
+    for (const link of candidateLinks) {
+      if (isInsideDetailsPaneOrNav(link)) continue;
+      // Map link up to its job card container
+      const cardContainer = link.closest(
+        'li.jobs-search-results__list-item, li.scaffold-layout__list-item, li[data-occludable-job-id], [data-occludable-job-id], div.job-card-container, div[data-view-name="job-card"], div[data-job-id], div.artdeco-entity-lockup, div.base-card, div[data-entity-urn*="jobPosting"], li, div[role="listitem"]'
+      ) || link.closest('li') || link.parentElement?.parentElement || link;
+
+      tryAddCard(cardContainer);
+    }
+
+    // Tier 2: Direct Card Selectors Fallback
     const cardSelectors = [
       'ul.scaffold-layout__list-container > li',
       'li.jobs-search-results__list-item',
@@ -659,22 +754,15 @@
       '[data-occludable-job-id]',
       'div.job-card-container',
       'div[data-view-name="job-card"]',
-      'div[data-job-id]'
+      'div[data-job-id]',
+      'div.artdeco-entity-lockup[data-job-id]',
+      'div.base-card[data-entity-urn]'
     ];
-    const found = Array.from(document.querySelectorAll(cardSelectors.join(', ')))
-      .filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
 
-    const deduped = [];
-    const seenJobIds = new Set();
-
-    for (const el of found) {
+    const directElements = Array.from(document.querySelectorAll(cardSelectors.join(', ')));
+    for (const el of directElements) {
       const cardEl = el.closest('li.jobs-search-results__list-item, li.scaffold-layout__list-item, ul.scaffold-layout__list-container > li') || el;
-      const jid = extractCardJobId(cardEl) || extractCardJobId(el);
-      const key = jid ? String(jid) : (cardEl.innerText?.slice(0, 50) || '');
-      if (key && !seenJobIds.has(key)) {
-        seenJobIds.add(key);
-        deduped.push(cardEl);
-      }
+      tryAddCard(cardEl);
     }
 
     return deduped;
@@ -694,11 +782,10 @@
 
   function selectJobCard(card) {
     if (!card) return;
-    const clickable = card.querySelector(
-      'a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [data-control-name="job_card_click"]'
-    ) || card.querySelector(
-      '.job-card-container, .job-card-list__entity-lockup, div[data-job-id], .artdeco-entity-lockup'
-    ) || card;
+    const clickable = (card.tagName === 'A' ? card : null) ||
+      card.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [data-control-name="job_card_click"]') ||
+      card.querySelector('.job-card-container, .job-card-list__entity-lockup, div[data-job-id], .artdeco-entity-lockup') ||
+      card;
 
     try {
       if (typeof clickable.focus === 'function') clickable.focus();
@@ -1036,50 +1123,57 @@
     }
     await sleep(2000);
 
-    // Direct Next button selectors
-    const nextBtnSelectors = [
-      'button.artdeco-pagination__button--next',
-      'button[aria-label="Next"]',
-      'button[aria-label="View next page"]',
-      'button[aria-label*="next page" i]',
-      'button[aria-label*="next" i]',
-      '.artdeco-pagination__pages button.selected + button',
-      '.artdeco-pagination__indicator--number.selected + li button',
-      '[aria-current="true"]'
-    ];
+    // CRITICAL: Strictly scope pagination search to pagination containers!
+    // NEVER query un-scoped 'button[aria-label*="next"]' or '[aria-current="true"]' on the whole document!
+    const paginationContainer = document.querySelector(
+      '.artdeco-pagination, [aria-label*="pagination" i], .jobs-search-pagination, [data-view-name*="pagination"], .jobs-search-results-list__pagination'
+    );
 
-    for (const sel of nextBtnSelectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        if (sel === '[aria-current="true"]') {
-          const nextLi = el.closest('li')?.nextElementSibling;
-          const nextBtnInLi = nextLi?.querySelector('button');
-          if (nextBtnInLi && !nextBtnInLi.disabled) {
-            log(`Navigating to next page via page button (${nextBtnInLi.textContent.trim()})...`, 'info');
-            triggerClick(nextBtnInLi);
-            await sleep(3500);
-            if (listContainer && listContainer !== window && listContainer.scrollTo) {
-              listContainer.scrollTo({ top: 0, behavior: 'instant' });
-            }
-            return true;
-          }
-          continue;
-        }
+    if (!paginationContainer) {
+      log('No pagination container found on page.', 'info');
+      return false;
+    }
 
-        const isDisabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled');
-        if (isDisabled) {
-          log('Reached the last page of results.', 'info');
-          return false;
-        }
-
-        log('Navigating to next page of results...', 'info');
-        triggerClick(el);
+    // 1. Check for numbered page buttons after current page inside paginationContainer
+    const activePageBtn = paginationContainer.querySelector(
+      'button[aria-current="page"], button[aria-current="true"], li.selected button, .artdeco-pagination__indicator--number.selected button'
+    );
+    if (activePageBtn) {
+      const currentLi = activePageBtn.closest('li');
+      const nextLi = currentLi?.nextElementSibling;
+      const nextBtnInLi = nextLi?.querySelector('button');
+      if (nextBtnInLi && !nextBtnInLi.disabled && nextBtnInLi.getAttribute('aria-disabled') !== 'true') {
+        const nextNum = nextBtnInLi.textContent.trim();
+        log(`Navigating to next page (${nextNum || 'next'})...`, 'info');
+        triggerClick(nextBtnInLi);
         await sleep(3500);
         if (listContainer && listContainer !== window && listContainer.scrollTo) {
           listContainer.scrollTo({ top: 0, behavior: 'instant' });
         }
         return true;
       }
+    }
+
+    // 2. Direct Next button inside paginationContainer
+    const nextBtn = paginationContainer.querySelector(
+      'button.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"], button[aria-label*="next page" i]'
+    );
+    if (nextBtn) {
+      const isDisabled = nextBtn.disabled ||
+                         nextBtn.getAttribute('aria-disabled') === 'true' ||
+                         nextBtn.classList.contains('artdeco-button--disabled') ||
+                         nextBtn.classList.contains('disabled');
+      if (isDisabled) {
+        log('Reached the last page of results (Next button is disabled).', 'info');
+        return false;
+      }
+      log('Navigating to next page of results...', 'info');
+      triggerClick(nextBtn);
+      await sleep(3500);
+      if (listContainer && listContainer !== window && listContainer.scrollTo) {
+        listContainer.scrollTo({ top: 0, behavior: 'instant' });
+      }
+      return true;
     }
 
     log('Reached the last page of results (no further pages found).', 'info');
