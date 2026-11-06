@@ -94,7 +94,10 @@
   function dispatchReactRadio(radio) {
     if (!radio) return;
     setNativeChecked(radio, true);
+    const label = radio.closest('label') || (radio.id ? document.querySelector(`label[for="${radio.id}"]`) : null);
+    if (label) dispatchReactClick(label);
     dispatchReactClick(radio);
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
     radio.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
@@ -115,8 +118,25 @@
       }
     }
 
+    // Number matching fallback (e.g. "1" matches "1 year" or "1+")
+    if (!matchedOption) {
+      const targetNum = target.match(/\d+/)?.[0];
+      if (targetNum !== undefined) {
+        for (const option of select.options) {
+          const optText = (option.textContent || '').toLowerCase().trim();
+          const optVal = (option.value || '').toLowerCase().trim();
+          const optNum = optText.match(/\d+/)?.[0] || optVal.match(/\d+/)?.[0];
+          if (optNum === targetNum) {
+            matchedOption = option;
+            break;
+          }
+        }
+      }
+    }
+
     if (matchedOption) {
       setNativeValue(select, matchedOption.value);
+      select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
@@ -126,11 +146,27 @@
   const FormFiller = {
     getModal(documentRef = document) {
       const doc = documentRef || document;
-      return doc.querySelector('.jobs-easy-apply-modal') ||
-        doc.querySelector('div.artdeco-modal[role="dialog"]') ||
-        doc.querySelector('div[role="dialog"]:has(.jobs-easy-apply-content)') ||
-        doc.querySelector('div[role="dialog"]:has([data-easy-apply-next-button])') ||
-        null;
+      const easyApplyModal = doc.querySelector(
+        '.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"], div.jobs-easy-apply-content'
+      );
+      if (easyApplyModal) {
+        return easyApplyModal.closest('div.artdeco-modal[role="dialog"], div[role="dialog"]') || easyApplyModal;
+      }
+
+      const dialogs = Array.from(doc.querySelectorAll('div.artdeco-modal[role="dialog"], div[role="dialog"]'));
+      for (const d of dialogs) {
+        if (d.offsetWidth > 0 && d.offsetHeight > 0) {
+          const hasEasyApplyContent = d.querySelector(
+            '.jobs-easy-apply-content, [data-easy-apply-next-button], .jobs-easy-apply-form-section, .jobs-easy-apply-footer, button[aria-label*="Submit application" i], button[aria-label*="Continue to next step" i]'
+          );
+          if (hasEasyApplyContent) return d;
+          const text = (d.textContent || '').toLowerCase();
+          if (text.includes('easy apply') || text.includes('apply to ') || text.includes('contact info') || text.includes('resume') || text.includes('screening questions')) {
+            return d;
+          }
+        }
+      }
+      return null;
     },
 
     checkCaptcha(documentRef = document) {
@@ -159,7 +195,8 @@
       const successIndicators = [
         'div[data-test-modal-id="easy-apply-success"]',
         '.artdeco-modal:has(.artdeco-inline-feedback--success)',
-        'div.jobs-easy-apply-modal:has([data-test-easy-apply-success])'
+        'div.jobs-easy-apply-modal:has([data-test-easy-apply-success])',
+        '.artdeco-toast--success'
       ];
 
       for (const sel of successIndicators) {
@@ -186,9 +223,19 @@
       const modal = this.getModal(doc);
 
       // 1. Check for Done / Dismiss button on success modal
-      const doneBtn = doc.querySelector('button[aria-label="Dismiss"], button[data-control-name="discard_application_confirm_btn"], button.artdeco-modal__dismiss, button[data-test-modal-close-btn]');
+      const doneBtn = doc.querySelector(
+        'button[aria-label="Dismiss"], button[data-control-name="discard_application_confirm_btn"], button.artdeco-modal__dismiss, button[data-test-modal-close-btn], button:has(span.artdeco-button__text:contains("Done"))'
+      );
       if (doneBtn) {
         dispatchReactClick(doneBtn);
+        return;
+      }
+
+      // Check for any visible button with text "Done"
+      const allButtons = Array.from(doc.querySelectorAll('div[role="dialog"] button')).filter(b => b.offsetWidth > 0 && b.offsetHeight > 0);
+      const textDone = allButtons.find(b => (b.textContent || '').trim().toLowerCase() === 'done');
+      if (textDone) {
+        dispatchReactClick(textDone);
         return;
       }
 
@@ -196,7 +243,6 @@
         const dismissBtn = modal.querySelector('button[aria-label="Dismiss"], button.artdeco-modal__dismiss');
         if (dismissBtn) {
           dispatchReactClick(dismissBtn);
-          // Confirm discard if prompt appears
           setTimeout(() => {
             const discardBtn = doc.querySelector('button[data-control-name="discard_application_confirm_btn"], button[data-test-dialog-primary-btn]');
             if (discardBtn) dispatchReactClick(discardBtn);
@@ -257,9 +303,13 @@
 
               if (!targetVal) {
                 const lowerLeg = legend.toLowerCase();
-                if (lowerLeg.includes('authorized to work') || lowerLeg.includes('legally authorized')) targetVal = 'yes';
+                if (lowerLeg.includes('authorized to work') || lowerLeg.includes('legally authorized') || lowerLeg.includes('legal right')) targetVal = 'yes';
                 else if (lowerLeg.includes('sponsorship')) targetVal = 'no';
                 else if (lowerLeg.includes('relocate') || lowerLeg.includes('commute')) targetVal = 'yes';
+                else if (lowerLeg.includes('background check') || lowerLeg.includes('drug test') || lowerLeg.includes('agreement')) targetVal = 'yes';
+                else if (lowerLeg.includes('serving notice') || lowerLeg.includes('notice period')) targetVal = 'yes';
+                else if (lowerLeg.includes('degree') || lowerLeg.includes('bachelor') || lowerLeg.includes('graduation')) targetVal = 'yes';
+                else if (lowerLeg.includes('experience') || lowerLeg.includes('proficient') || lowerLeg.includes('comfortable') || lowerLeg.includes('familiar')) targetVal = 'yes';
               }
 
               if (targetVal) {
@@ -296,8 +346,23 @@
             if (!select.value || select.value === '') {
               const label = matcher ? matcher.extractFieldLabel(container, select) : '';
               const match = matcher ? matcher.findBestMatch(label, profile, profile.screening) : null;
-              if (match && match.value) {
-                const ok = dispatchReactSelect(select, String(match.value));
+              let targetVal = match && match.value !== undefined ? String(match.value) : null;
+
+              if (!targetVal) {
+                const lowerLabel = label.toLowerCase();
+                if (lowerLabel.includes('authorized') || lowerLabel.includes('eligible') || lowerLabel.includes('commute') || lowerLabel.includes('relocate') || lowerLabel.includes('degree') || lowerLabel.includes('experience')) {
+                  targetVal = 'Yes';
+                } else if (lowerLabel.includes('sponsorship')) {
+                  targetVal = 'No';
+                } else if (lowerLabel.includes('proficiency') || lowerLabel.includes('level')) {
+                  targetVal = profile.work?.defaultProficiency || 'Intermediate';
+                } else if (lowerLabel.includes('years') || lowerLabel.includes('experience')) {
+                  targetVal = profile.work?.currentRole?.yearsExperience || '1';
+                }
+              }
+
+              if (targetVal) {
+                const ok = dispatchReactSelect(select, targetVal);
                 if (ok) filled++;
                 else if (select.required || select.getAttribute('aria-required') === 'true') {
                   unhandledRequired.push({ type: 'select', label, element: select });
@@ -321,9 +386,33 @@
                 dispatchReactInput(input, match.value);
                 filled++;
               } else {
-                const isReq = input.required || input.hasAttribute('required') || input.getAttribute('aria-required') === 'true';
-                if (isReq) {
-                  unhandledRequired.push({ type: 'input', label, element: input });
+                // Smart fallbacks for common unmapped questions
+                const lowerLabel = label.toLowerCase();
+                let fallbackVal = null;
+                if (lowerLabel.includes('years of experience') || lowerLabel.includes('how many years') || lowerLabel.includes('total experience')) {
+                  fallbackVal = profile.work?.currentRole?.yearsExperience || '1';
+                } else if (lowerLabel.includes('notice period') || lowerLabel.includes('how soon') || lowerLabel.includes('availability')) {
+                  fallbackVal = profile.work?.targetRole?.noticePeriod || '15';
+                } else if (lowerLabel.includes('expected salary') || lowerLabel.includes('expected ctc')) {
+                  fallbackVal = profile.work?.targetRole?.expectedSalary || '450000';
+                } else if (lowerLabel.includes('current salary') || lowerLabel.includes('current ctc')) {
+                  fallbackVal = profile.work?.currentRole?.currentSalary || '350000';
+                } else if (lowerLabel.includes('city') || lowerLabel.includes('location')) {
+                  fallbackVal = profile.personal?.city || 'Bengaluru';
+                } else if (lowerLabel.includes('linkedin')) {
+                  fallbackVal = profile.personal?.linkedin || '';
+                } else if (lowerLabel.includes('website') || lowerLabel.includes('github') || lowerLabel.includes('portfolio')) {
+                  fallbackVal = profile.personal?.github || '';
+                }
+
+                if (fallbackVal !== null && fallbackVal !== '') {
+                  dispatchReactInput(input, fallbackVal);
+                  filled++;
+                } else {
+                  const isReq = input.required || input.hasAttribute('required') || input.getAttribute('aria-required') === 'true';
+                  if (isReq) {
+                    unhandledRequired.push({ type: 'input', label, element: input });
+                  }
                 }
               }
             }
@@ -336,14 +425,11 @@
 
     findActionButtons(modalEl) {
       if (!modalEl) return { btnNext: null, btnReview: null, btnSubmit: null };
-      const footer = modalEl.querySelector('.jobs-easy-apply-footer, footer, .artdeco-modal__actionbar');
-      const searchScope = footer || modalEl;
+      const isVisible = (b) => b && b.offsetWidth > 0 && b.offsetHeight > 0 && !b.disabled;
 
-      const isVisible = (b) => b && b.offsetWidth > 0 && b.offsetHeight > 0;
-
-      let btnNext = searchScope.querySelector('button[data-easy-apply-next-button], button[aria-label*="Continue to next step"], button[aria-label*="Continue"], #btn-next');
-      let btnReview = searchScope.querySelector('button[aria-label*="Review your application"], button[aria-label*="Review"], #btn-review');
-      let btnSubmit = searchScope.querySelector('button[aria-label*="Submit application"], #btn-submit');
+      let btnNext = modalEl.querySelector('button[data-easy-apply-next-button], button[aria-label*="Continue to next step" i], button[aria-label*="Next" i], #btn-next');
+      let btnReview = modalEl.querySelector('button[aria-label*="Review your application" i], button[aria-label*="Review" i], #btn-review');
+      let btnSubmit = modalEl.querySelector('button[aria-label*="Submit application" i], #btn-submit');
 
       if (btnNext && !isVisible(btnNext)) btnNext = null;
       if (btnReview && !isVisible(btnReview)) btnReview = null;
@@ -353,14 +439,18 @@
         return { btnNext, btnReview, btnSubmit };
       }
 
-      const allButtons = Array.from(searchScope.querySelectorAll('button')).filter(isVisible);
+      const allButtons = Array.from(modalEl.querySelectorAll('button')).filter(isVisible);
       for (const btn of allButtons) {
-        const text = `${btn.innerText || btn.textContent || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase();
+        const text = `${btn.innerText || btn.textContent || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase().trim();
         if (text.includes('back') || text.includes('previous') || text.includes('cancel') || text.includes('dismiss') || text.includes('discard') || text.includes('close')) continue;
 
-        if (!btnSubmit && text.includes('submit')) btnSubmit = btn;
-        else if (!btnReview && text.includes('review')) btnReview = btn;
-        else if (!btnNext && (text.includes('next') || text.includes('continue') || text.includes('proceed'))) btnNext = btn;
+        if (!btnSubmit && (text.includes('submit application') || text === 'submit')) {
+          btnSubmit = btn;
+        } else if (!btnReview && (text.includes('review your application') || text === 'review')) {
+          btnReview = btn;
+        } else if (!btnNext && (text.includes('next') || text.includes('continue') || text.includes('proceed'))) {
+          btnNext = btn;
+        }
       }
 
       return { btnNext, btnReview, btnSubmit };

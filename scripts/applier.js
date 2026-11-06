@@ -14,6 +14,19 @@
   let isHalted = false;
   let isStalledForUser = false;
   let processedJobIds = new Set();
+  const appliedJobIdSet = new Set();
+
+  async function loadAppliedJobIds() {
+    try {
+      const data = await chrome.storage.local.get(['appliedJobs']);
+      const list = data?.appliedJobs || [];
+      appliedJobIdSet.clear();
+      list.forEach(j => {
+        if (j.id) appliedJobIdSet.add(String(j.id));
+        if (j.jobId) appliedJobIdSet.add(String(j.jobId));
+      });
+    } catch (_) {}
+  }
 
   async function loadProcessedJobIds() {
     try {
@@ -22,6 +35,7 @@
       processedJobIds.clear();
       list.forEach(id => processedJobIds.add(String(id)));
     } catch (_) {}
+    await loadAppliedJobIds();
   }
 
   async function persistProcessedJobId(jobId) {
@@ -117,38 +131,29 @@
   function triggerClick(el) {
     if (!el) return;
     try {
-      el.focus();
+      if (typeof el.focus === 'function') el.focus();
       const mouseEventInit = { bubbles: true, cancelable: true, view: window };
       el.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
       el.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
-
-      // If the target is an anchor tag or nested within an anchor tag,
-      // prevent browser default link navigation so it does not pull the tab away from /jobs/search/
-      const isAnchor = el.tagName === 'A' || el.closest('a');
-      const clickEvent = new MouseEvent('click', mouseEventInit);
-      if (isAnchor) {
-        clickEvent.preventDefault();
-      }
-      el.dispatchEvent(clickEvent);
-
-      // Only execute native .click() for non-anchor elements (buttons, inputs, divs)
-      if (!isAnchor) {
+      el.dispatchEvent(new MouseEvent('click', mouseEventInit));
+      if (typeof el.click === 'function') {
         el.click();
       }
     } catch (_) {
-      if (el.tagName !== 'A' && !el.closest('a')) {
-        try { el.click(); } catch (e) {}
-      }
+      try { el.click(); } catch (e) {}
     }
   }
 
   function buildLinkedInSearchUrl(queryStr, settings = {}) {
     const query = queryStr || 'Data Analyst';
-    const location = settings.targetLocation || 'Bengaluru, Karnataka, India';
+    const location = settings.targetLocation || '';
     const dateFilter = settings.dateFilter || 'r86400';
     const sortBy = settings.sortBy || 'DD';
 
-    let url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}`;
+    let url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}`;
+    if (location && location.trim() !== '' && location.toLowerCase() !== 'any') {
+      url += `&location=${encodeURIComponent(location)}`;
+    }
     if (dateFilter && dateFilter !== 'any') {
       url += `&f_TPR=${encodeURIComponent(dateFilter)}`;
     }
@@ -227,40 +232,76 @@
     };
   }
 
-  function inspectApplyButton(detailsPane) {
+  function inspectApplyButton(detailsPane, card = null) {
     const scope = detailsPane || document;
 
-    // 1. Easy Apply button
-    const easyApplyBtn = scope.querySelector(
-      'button.jobs-apply-button, button[data-job-id][aria-label*="Easy Apply"], button[aria-label*="Easy Apply"], .jobs-apply-button--top-card button'
-    );
+    // 1. Direct Easy Apply button selectors
+    const easyApplySelectors = [
+      'button.jobs-apply-button',
+      'button.jobs-apply-button--top-card',
+      '.jobs-apply-button--top-card button',
+      'button[data-job-id][aria-label*="Easy Apply" i]',
+      'button[aria-label*="Easy Apply" i]',
+      'button[data-control-name="jobdetails_topcard_inapply"]',
+      '.jobs-s-apply button',
+      'button:has(span.jobs-apply-button__text)',
+      'button.artdeco-button--primary:has(svg)'
+    ];
 
-    if (easyApplyBtn) {
-      const txt = (easyApplyBtn.textContent || easyApplyBtn.getAttribute('aria-label') || '').toLowerCase();
-      if (txt.includes('easy apply')) {
-        return { type: 'easy_apply', element: easyApplyBtn };
-      }
+    for (const sel of easyApplySelectors) {
+      try {
+        const btn = scope.querySelector(sel) || document.querySelector(`.scaffold-layout__detail ${sel}`);
+        if (btn && btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+          const txt = `${btn.textContent || ''} ${btn.getAttribute('aria-label') || ''}`.toLowerCase();
+          if (txt.includes('easy apply')) {
+            return { type: 'easy_apply', element: btn };
+          }
+        }
+      } catch (_) {}
     }
 
-    // Check by inner text
+    // 2. Check all visible buttons in the details pane
     const allButtons = Array.from(scope.querySelectorAll('button, a')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
     const textEasyApply = allButtons.find(b => {
-      const t = (b.textContent || b.getAttribute('aria-label') || '').toLowerCase().trim();
+      const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase().trim();
       return t.includes('easy apply');
     });
     if (textEasyApply) {
       return { type: 'easy_apply', element: textEasyApply };
     }
 
-    // 2. External Apply button
+    // 3. Document-wide fallback for Easy Apply button
+    const docButtons = Array.from(document.querySelectorAll('.scaffold-layout__detail button, main button')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+    const docEasyApply = docButtons.find(b => {
+      const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase().trim();
+      return t.includes('easy apply');
+    });
+    if (docEasyApply) {
+      return { type: 'easy_apply', element: docEasyApply };
+    }
+
+    // 4. External Apply button
     const extApply = allButtons.find(b => {
-      const t = (b.textContent || b.getAttribute('aria-label') || '').toLowerCase().trim();
+      const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase().trim();
       return t.includes('apply on company website') || t.includes('apply to') || t === 'apply';
     });
-
     if (extApply) {
       const url = extApply.href || extApply.getAttribute('href') || window.location.href;
       return { type: 'company_site', element: extApply, url };
+    }
+
+    // 5. Card-level Easy Apply fallback check
+    if (card) {
+      const cardText = (card.textContent || '').toLowerCase();
+      if (cardText.includes('easy apply')) {
+        const anyEasyBtn = Array.from(document.querySelectorAll('button')).find(b => {
+          const t = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''}`.toLowerCase();
+          return t.includes('easy apply') && b.offsetWidth > 0;
+        });
+        if (anyEasyBtn) {
+          return { type: 'easy_apply', element: anyEasyBtn };
+        }
+      }
     }
 
     return { type: 'unknown', element: null };
@@ -323,52 +364,75 @@
 
   // Extract clean Title, Company, and Location from both details pane and card
   function extractJobMetadata(scope, card) {
-    const titleEl = scope.querySelector('.job-details-jobs-unified-top-card__job-title, h2.job-details-jobs-unified-top-card__job-title, h1, h2') ||
-                    card.querySelector('a.job-card-list__title--link, a.job-card-container__link, [data-control-name="job_card_click"]');
-    const jobTitle = titleEl ? titleEl.textContent.trim() : 'Unknown Role';
+    const pane = scope || document;
 
-    // Company
+    // 1. Job Title: Extract from card first (most reliable source for active card)
+    let jobTitle = '';
+    if (card) {
+      const cardTitleEl = card.querySelector(
+        'a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [class*="job-card-list__title"], strong'
+      );
+      if (cardTitleEl && cardTitleEl.textContent.trim()) {
+        jobTitle = cardTitleEl.textContent.trim();
+      }
+    }
+
+    // Supplement from details pane top card (avoid generic headers like "About the company")
+    if (!jobTitle) {
+      const paneTitleEl = pane.querySelector(
+        '.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, h1[class*="job-title"], [data-view-name="job-details"] h1, h1.t-24, h2.job-details-jobs-unified-top-card__job-title'
+      );
+      if (paneTitleEl && paneTitleEl.textContent.trim()) {
+        jobTitle = paneTitleEl.textContent.trim();
+      }
+    }
+    if (!jobTitle) jobTitle = 'Unknown Role';
+
+    // 2. Company
     let company = '';
-    const companyEl = scope.querySelector('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name, a[href*="/company/"]');
-    if (companyEl && companyEl.textContent.trim()) {
-      company = companyEl.textContent.trim();
-    } else {
-      const cardCompany = card.querySelector('.job-card-container__primary-description, .job-card-container__company-name, a.job-card-container__company-name');
-      if (cardCompany && cardCompany.textContent.trim()) {
-        company = cardCompany.textContent.trim();
+    if (card) {
+      const cardComp = card.querySelector(
+        '.job-card-container__primary-description, .job-card-container__company-name, [class*="company-name"], [class*="primary-description"]'
+      );
+      if (cardComp && cardComp.textContent.trim()) {
+        company = cardComp.textContent.trim();
       }
     }
-
-    // Location
-    let location = '';
-    const cardLocEl = card.querySelector('.job-card-container__metadata-item, .job-card-list__location, ul.job-card-container__metadata-wrapper li, [class*="metadata-item"], [class*="job-card-container__metadata"]');
-    if (cardLocEl && cardLocEl.textContent.trim()) {
-      location = cardLocEl.textContent.trim();
-    }
-
-    const primaryDescEl = scope.querySelector('.job-details-jobs-unified-top-card__primary-description, .jobs-unified-top-card__primary-description, .job-details-jobs-unified-top-card__subtitle');
-    if (primaryDescEl) {
-      const rawDesc = primaryDescEl.textContent || '';
-      const parts = rawDesc.split(/[·•|]/).map(s => s.trim()).filter(Boolean);
-      if (!company && parts.length > 0) {
-        company = parts[0];
-      }
-      if ((!location || location === 'Unknown Location') && parts.length > 1) {
-        const candidateLoc = parts.find(p => !p.toLowerCase().includes('ago') && !p.toLowerCase().includes('applicant') && !p.toLowerCase().includes('promoted') && p !== company);
-        if (candidateLoc) {
-          location = candidateLoc;
-        }
+    if (!company) {
+      const paneComp = pane.querySelector(
+        '.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name, a[href*="/company/"]'
+      );
+      if (paneComp && paneComp.textContent.trim()) {
+        company = paneComp.textContent.trim();
       }
     }
-
-    if (!location || location === 'Unknown Location') {
-      const locSpan = scope.querySelector('.job-details-jobs-unified-top-card__bullet ~ span, [class*="workplace-type"], .jobs-unified-top-card__bullet ~ span');
-      if (locSpan && locSpan.textContent.trim()) {
-        location = locSpan.textContent.trim();
-      }
-    }
-
     if (!company) company = 'Unknown Company';
+
+    // 3. Location
+    let location = '';
+    if (card) {
+      const cardLoc = card.querySelector(
+        '.job-card-container__metadata-item, .job-card-list__location, [class*="metadata-item"], [class*="job-card-container__metadata"]'
+      );
+      if (cardLoc && cardLoc.textContent.trim()) {
+        location = cardLoc.textContent.trim();
+      }
+    }
+    if (!location || location === 'Unknown Location') {
+      const primaryDescEl = pane.querySelector(
+        '.job-details-jobs-unified-top-card__primary-description, .jobs-unified-top-card__primary-description, .job-details-jobs-unified-top-card__subtitle'
+      );
+      if (primaryDescEl) {
+        const rawDesc = primaryDescEl.textContent || '';
+        const parts = rawDesc.split(/[·•|]/).map(s => s.trim()).filter(Boolean);
+        const candidateLoc = parts.find(p => !p.toLowerCase().includes('ago') && !p.toLowerCase().includes('applicant') && !p.toLowerCase().includes('promoted') && p !== company);
+        if (candidateLoc) location = candidateLoc;
+      }
+    }
+    if (!location) {
+      const locSpan = pane.querySelector('.job-details-jobs-unified-top-card__bullet ~ span, [class*="workplace-type"]');
+      if (locSpan && locSpan.textContent.trim()) location = locSpan.textContent.trim();
+    }
     if (!location) location = 'Unknown Location';
 
     return { jobTitle, company, location };
@@ -376,26 +440,59 @@
 
   async function waitForJobDetails(card, maxWaitMs = 3000) {
     const start = Date.now();
-    await sleep(400);
+    await sleep(350);
+
+    const getPane = () => document.querySelector(
+      '.scaffold-layout__detail, .jobs-search-two-pane__details, [data-view-name="job-details"], main.scaffold-layout__main, .jobs-search__job-details, div.job-view-layout, .jobs-details__main-content'
+    );
+
+    const getDesc = (pane) => {
+      const scope = pane || document;
+      return scope.querySelector('#job-details, .jobs-description__content, .jobs-box__html-content, article');
+    };
 
     while (Date.now() - start < maxWaitMs) {
-      const detailsPane = document.querySelector('.jobs-search__job-details, .jobs-description__content, #job-details, .job-view-layout');
-      const desc = document.querySelector('#job-details, .jobs-description__content, .jobs-box__html-content');
-
-      if (desc && desc.textContent.trim().length > 30) {
-        return { detailsPane, desc };
+      const pane = getPane();
+      const desc = getDesc(pane);
+      const hasTopCard = pane?.querySelector('.job-details-jobs-unified-top-card, .jobs-unified-top-card, button.jobs-apply-button');
+      if (pane && (desc || hasTopCard)) {
+        return { detailsPane: pane, desc };
       }
       await sleep(200);
     }
+
+    const finalPane = getPane() || document;
     return {
-      detailsPane: document.querySelector('.jobs-search__job-details, .jobs-description__content, #job-details'),
-      desc: document.querySelector('#job-details, .jobs-description__content')
+      detailsPane: finalPane,
+      desc: getDesc(finalPane)
     };
   }
 
-  async function executeEasyApplyFlow(profile, settings) {
+  async function executeEasyApplyFlow(profile, settings, applyBtn = null) {
     log('Waiting for Easy Apply modal to load...', 'info');
-    await sleep(2000);
+
+    let modal = null;
+    for (let wait = 0; wait < 6; wait++) {
+      await sleep(600);
+      modal = window.LinkedInAutoFormFiller?.getModal();
+      if (modal) break;
+    }
+
+    // If modal didn't open, retry clicking the Easy Apply button once
+    if (!modal && applyBtn) {
+      log('Modal did not appear; re-triggering Easy Apply click...', 'info');
+      triggerClick(applyBtn);
+      for (let wait = 0; wait < 5; wait++) {
+        await sleep(600);
+        modal = window.LinkedInAutoFormFiller?.getModal();
+        if (modal) break;
+      }
+    }
+
+    if (!modal) {
+      log('⚠️ Easy Apply modal did not open. Moving to next job.', 'warning');
+      return { success: false, reason: 'modal_did_not_open' };
+    }
 
     const maxSteps = 15;
     let stepCount = 0;
@@ -405,8 +502,8 @@
       if (isHalted) return { success: false, reason: 'halted' };
       stepCount++;
 
-      const modal = window.LinkedInAutoFormFiller?.getModal();
-      if (!modal) {
+      const currentModal = window.LinkedInAutoFormFiller?.getModal() || modal;
+      if (!currentModal) {
         if (window.LinkedInAutoFormFiller?.isApplicationSubmitted()) {
           log('🎉 Application submitted successfully!', 'success');
           return { success: true };
@@ -428,7 +525,7 @@
       }
 
       // Check if already on submitted confirmation
-      if (window.LinkedInAutoFormFiller?.isApplicationSubmitted(modal)) {
+      if (window.LinkedInAutoFormFiller?.isApplicationSubmitted(currentModal)) {
         log('🎉 Confirmation detected: Application submitted!', 'success');
         await sleep(1500);
         window.LinkedInAutoFormFiller?.closeModal();
@@ -455,8 +552,8 @@
         // Freeze indefinitely until user fills the question and advances/submits or closes modal
         while (isStalledForUser && !isHalted) {
           await sleep(1500);
-          const currentModal = window.LinkedInAutoFormFiller?.getModal();
-          if (!currentModal || window.LinkedInAutoFormFiller?.isApplicationSubmitted(currentModal)) {
+          const activeModal = window.LinkedInAutoFormFiller?.getModal();
+          if (!activeModal || window.LinkedInAutoFormFiller?.isApplicationSubmitted(activeModal)) {
             isStalledForUser = false;
             break;
           }
@@ -473,9 +570,9 @@
       await humanDelay(settings?.stepDelayMs || 1000);
 
       // Advance or Submit
-      const advRes = await window.LinkedInAutoFormFiller?.advanceOrSubmit(modal, settings);
+      const advRes = await window.LinkedInAutoFormFiller?.advanceOrSubmit(currentModal, settings);
       if (advRes?.action === 'submitted') {
-        log('Clicked Submit application button!', 'info');
+        log('Clicked Submit application button! Waiting for confirmation...', 'info');
         await sleep(2500);
         window.LinkedInAutoFormFiller?.closeModal();
         return { success: true };
@@ -511,25 +608,10 @@
   }
 
   function getJobListContainer() {
-    // 1. Traverse up from any rendered job card to find the true scrollable container
-    const sample = document.querySelector('div.job-card-container, li.jobs-search-results__list-item, div[data-job-id], [data-occludable-job-id]');
-    if (sample) {
-      let p = sample.parentElement;
-      while (p && p !== document.body && p !== document.documentElement) {
-        if (p.scrollHeight > p.clientHeight && p.clientHeight > 200) {
-          const style = window.getComputedStyle(p);
-          const oy = style.overflowY;
-          if (oy === 'auto' || oy === 'scroll' || p.classList.contains('scaffold-layout__list') || p.classList.contains('jobs-search-results-list')) {
-            return p;
-          }
-        }
-        p = p.parentElement;
-      }
-    }
-
-    // 2. Comprehensive selector list for LinkedIn's left-rail layout
+    // 1. Direct modern LinkedIn left rail containers
     const selectors = [
       '.scaffold-layout__list',
+      'div.scaffold-layout__list',
       '.scaffold-layout__list-container',
       '.jobs-search-results-list',
       '.jobs-search-results-list__list',
@@ -539,10 +621,95 @@
     ];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
+      if (el && el.scrollHeight > el.clientHeight && el.clientHeight > 150) return el;
+    }
+
+    // 2. Traverse up from any rendered job card to find the true scrollable container
+    const sample = document.querySelector(
+      'ul.scaffold-layout__list-container > li, div.job-card-container, li.jobs-search-results__list-item, div[data-job-id], [data-occludable-job-id]'
+    );
+    if (sample) {
+      let p = sample.parentElement;
+      while (p && p !== document.body && p !== document.documentElement) {
+        if (p.scrollHeight > p.clientHeight && p.clientHeight > 150) {
+          const style = window.getComputedStyle(p);
+          const oy = style.overflowY;
+          if (oy === 'auto' || oy === 'scroll' || p.classList.contains('scaffold-layout__list')) {
+            return p;
+          }
+        }
+        p = p.parentElement;
+      }
+    }
+
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
       if (el) return el;
     }
 
     return window;
+  }
+
+  function getRenderedJobCards() {
+    const cardSelectors = [
+      'ul.scaffold-layout__list-container > li',
+      'li.jobs-search-results__list-item',
+      'li.scaffold-layout__list-item',
+      '.jobs-search-results-list li',
+      '[data-occludable-job-id]',
+      'div.job-card-container',
+      'div[data-view-name="job-card"]',
+      'div[data-job-id]'
+    ];
+    const found = Array.from(document.querySelectorAll(cardSelectors.join(', ')))
+      .filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
+
+    const deduped = [];
+    const seenJobIds = new Set();
+
+    for (const el of found) {
+      const cardEl = el.closest('li.jobs-search-results__list-item, li.scaffold-layout__list-item, ul.scaffold-layout__list-container > li') || el;
+      const jid = extractCardJobId(cardEl) || extractCardJobId(el);
+      const key = jid ? String(jid) : (cardEl.innerText?.slice(0, 50) || '');
+      if (key && !seenJobIds.has(key)) {
+        seenJobIds.add(key);
+        deduped.push(cardEl);
+      }
+    }
+
+    return deduped;
+  }
+
+  function isJobAlreadyApplied(jobId, card) {
+    if (appliedJobIdSet.has(String(jobId))) return true;
+    if (!card) return false;
+    const appliedBadge = card.querySelector('.job-card-container__footer-job-state, [data-test-job-card-applied]');
+    if (appliedBadge) return true;
+    const textElements = Array.from(card.querySelectorAll('span, li, div, time'));
+    return textElements.some(el => {
+      const t = (el.textContent || '').trim().toLowerCase();
+      return t === 'applied' || t.startsWith('applied ');
+    });
+  }
+
+  function selectJobCard(card) {
+    if (!card) return;
+    const clickable = card.querySelector(
+      'a.job-card-list__title--link, a.job-card-container__link, .job-card-list__title, [data-control-name="job_card_click"]'
+    ) || card.querySelector(
+      '.job-card-container, .job-card-list__entity-lockup, div[data-job-id], .artdeco-entity-lockup'
+    ) || card;
+
+    try {
+      if (typeof clickable.focus === 'function') clickable.focus();
+      const mouseEventInit = { bubbles: true, cancelable: true, view: window };
+      clickable.dispatchEvent(new MouseEvent('mousedown', mouseEventInit));
+      clickable.dispatchEvent(new MouseEvent('mouseup', mouseEventInit));
+      clickable.dispatchEvent(new MouseEvent('click', mouseEventInit));
+      if (typeof clickable.click === 'function') {
+        clickable.click();
+      }
+    } catch (_) {}
   }
 
   async function processJobCard(card, profile, settings) {
@@ -551,33 +718,26 @@
     // 1. Extract job ID
     const jobId = extractCardJobId(card) || `li_job_${Date.now()}`;
 
-    // Fast Skip: Already processed in local session history
+    // Fast Skip: Permanent check against already-applied listings
+    if (isJobAlreadyApplied(jobId, card)) {
+      log(`⏭️ Skipped: Job #${jobId} already applied.`, 'info');
+      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'already_applied' } }).catch(() => {});
+      return 'skipped_already_applied';
+    }
+
+    // Fast Skip: Already processed in current session run
     if (processedJobIds.has(String(jobId))) {
       return 'already_processed';
     }
 
     await persistProcessedJobId(jobId);
 
-    // Fast Skip: Already Applied badge on LinkedIn card
-    const isAlreadyAppliedOnLinkedIn = card.querySelector('.job-card-container__footer-job-state, [data-test-job-card-applied]') ||
-      Array.from(card.querySelectorAll('span, li, div')).some(el => {
-        const t = (el.textContent || '').trim().toLowerCase();
-        return t === 'applied' || t.startsWith('applied ');
-      });
-
-    if (isAlreadyAppliedOnLinkedIn) {
-      log(`⏭️ Skipped: Job #${jobId} already applied on LinkedIn.`, 'info');
-      chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'already_applied' } }).catch(() => {});
-      return 'skipped_already_applied';
-    }
-
     card.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const originalOutline = card.style.outline;
     card.style.outline = '2px solid #0a66c2';
 
-    // Click card container or lockup element to load right-side details without triggering <a> full-page navigation
-    const clickable = card.querySelector('.job-card-container, .job-card-list__entity-lockup, div[data-job-id], .artdeco-entity-lockup') || card;
-    triggerClick(clickable);
+    // Click card to load right-side details cleanly
+    selectJobCard(card);
 
     // Wait for details pane
     const { detailsPane, desc } = await waitForJobDetails(card, 3000);
@@ -656,29 +816,27 @@
 
     // 0.2 Strict Job Title Relevance Filter
     if (settings?.matchTitleRelevance !== false) {
-      const targetQuery = (settings?.targetJobQuery || profile?.work?.targetRole?.jobTitle || 'Data Analyst').toLowerCase().trim();
+      const targetQueryRaw = (settings?.targetJobQuery || profile?.work?.targetRole?.jobTitle || 'Data Analyst').toLowerCase().trim();
+      const targetQueries = targetQueryRaw.split(/[,;]/).map(q => q.trim()).filter(Boolean);
       const titleLower = (jobTitle || '').toLowerCase();
 
-      // If user is searching for an Analyst role, title MUST be an Analyst / Analytics / BI / Intelligence role
-      if (targetQuery.includes('analyst') || targetQuery.includes('analytics')) {
-        const isAnalystRole = /\b(analyst|analytics|analysis|bi\b|business intelligence|reporting|insights|mis\b)/i.test(titleLower);
-        if (!isAnalystRole) {
-          log(`🎯 Skipped: "${jobTitle}" does not contain target "Analyst" role keywords (Title Relevance Filter).`, 'info');
-          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'title_relevance' } }).catch(() => {});
-          card.style.outline = originalOutline;
-          return 'skipped_title_relevance';
+      const matchesAnyTarget = targetQueries.some(tQuery => {
+        if (tQuery.includes('analyst') || tQuery.includes('analytics')) {
+          return /\b(analyst|analytics|analysis|bi\b|business intelligence|reporting|insights|mis\b|data)\b/i.test(titleLower);
         }
-      } else {
-        // Generic target: extract main query keywords (minimum 3 chars, skip filler words)
+        if (tQuery.includes('developer') || tQuery.includes('engineer')) {
+          return /\b(developer|engineer|software|sde|swe|programmer)\b/i.test(titleLower);
+        }
         const filler = ['and', 'the', 'for', 'with', 'remote', 'in', 'at', 'jobs', 'job'];
-        const targetTokens = targetQuery.split(/\s+/).map(t => t.replace(/[^a-z0-9]/g, '')).filter(t => t.length > 2 && !filler.includes(t));
-        const hasTokenMatch = targetTokens.some(tok => titleLower.includes(tok));
-        if (!hasTokenMatch && targetTokens.length > 0) {
-          log(`🎯 Skipped: "${jobTitle}" does not match target keywords from "${targetQuery}" (Title Relevance Filter).`, 'info');
-          chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'title_relevance' } }).catch(() => {});
-          card.style.outline = originalOutline;
-          return 'skipped_title_relevance';
-        }
+        const targetTokens = tQuery.split(/\s+/).map(t => t.replace(/[^a-z0-9]/g, '')).filter(t => t.length > 2 && !filler.includes(t));
+        return targetTokens.length === 0 || targetTokens.some(tok => titleLower.includes(tok));
+      });
+
+      if (!matchesAnyTarget) {
+        log(`🎯 Skipped: "${jobTitle}" does not match target role "${targetQueryRaw}" (Title Relevance Filter).`, 'info');
+        chrome.runtime.sendMessage({ action: 'UPDATE_STATS', delta: { skipped: 1, reason: 'title_relevance' } }).catch(() => {});
+        card.style.outline = originalOutline;
+        return 'skipped_title_relevance';
       }
     }
 
@@ -703,24 +861,33 @@
     if (settings?.strictLocation !== false) {
       const locLower = (location || '').toLowerCase();
       const rawTarget = (settings?.targetLocation || '').toLowerCase().trim();
-      const targetTokens = rawTarget.split(/[,|]/).map(t => t.trim()).filter(t => t.length > 2);
       const isRemote = locLower.includes('remote') || fullText.toLowerCase().includes('remote') || fullText.toLowerCase().includes('work from home');
 
-      let isCityMatch = targetTokens.length === 0;
+      const targetTokens = rawTarget.split(/[,|]/).map(t => t.trim()).filter(t => t.length > 1);
+      const isNationwideIndia = targetTokens.length === 0 ||
+                                targetTokens.includes('india') ||
+                                rawTarget === 'india' ||
+                                rawTarget === 'all india' ||
+                                rawTarget === 'any' ||
+                                rawTarget === '';
+
+      let isCityMatch = isNationwideIndia;
       if (!isCityMatch) {
-        if (targetTokens.includes('india') || rawTarget === 'india' || rawTarget === 'all india') {
-          isCityMatch = true;
-        } else {
-          isCityMatch = targetTokens.some(t => {
-            if (t === 'bangalore' || t === 'bengaluru') {
-              return locLower.includes('bangalore') || locLower.includes('bengaluru');
-            }
-            if (t === 'delhi' || t === 'ncr' || t === 'gurgaon' || t === 'gurugram' || t === 'noida') {
-              return locLower.includes('delhi') || locLower.includes('ncr') || locLower.includes('gurgaon') || locLower.includes('gurugram') || locLower.includes('noida');
-            }
+        isCityMatch = targetTokens.some(t => {
+          if (t === 'bangalore' || t === 'bengaluru') {
+            return locLower.includes('bangalore') || locLower.includes('bengaluru') || fullText.toLowerCase().includes('bengaluru');
+          }
+          if (t === 'delhi' || t === 'ncr' || t === 'gurgaon' || t === 'gurugram' || t === 'noida') {
+            return locLower.includes('delhi') || locLower.includes('ncr') || locLower.includes('gurgaon') || locLower.includes('gurugram') || locLower.includes('noida');
+          }
+          if (t === 'hyderabad') {
+            return locLower.includes('hyderabad');
+          }
+          if (t === 'mumbai' || t === 'pune') {
             return locLower.includes(t);
-          });
-        }
+          }
+          return locLower.includes(t);
+        });
       }
 
       if (!isRemote && !isCityMatch) {
@@ -775,7 +942,7 @@
 
     // 4. Criteria matches! Inspect apply button
     log(`🎯 Criteria matched for "${jobTitle}"! Checking apply type...`, 'success');
-    const applyInfo = inspectApplyButton(scope);
+    const applyInfo = inspectApplyButton(scope, card);
 
     // Subcase A: "Easy Apply" -> AUTO-APPLY
     if (applyInfo.type === 'easy_apply') {
@@ -796,7 +963,7 @@
       log(`🚀 "Easy Apply" found! Starting application for "${jobTitle}"...`, 'info');
       triggerClick(applyInfo.element);
 
-      const result = await executeEasyApplyFlow(profile, settings);
+      const result = await executeEasyApplyFlow(profile, settings, applyInfo.element);
       if (result.success) {
         chrome.runtime.sendMessage({
           action: 'JOB_APPLIED',
@@ -860,48 +1027,55 @@
   async function navigateToNextPage() {
     log('Searching for Next Page of job results...', 'info');
 
-    // Smooth scroll down the jobs list to make sure all items and pagination are loaded
+    // Smooth scroll down the jobs list container to the bottom so pagination renders
     const listContainer = getJobListContainer();
-    if (listContainer && listContainer.scrollTo) {
+    if (listContainer && listContainer !== window && listContainer.scrollTo) {
       listContainer.scrollTo({ top: listContainer.scrollHeight || 10000, behavior: 'smooth' });
     } else if (window.scrollTo) {
       window.scrollTo({ top: document.body.scrollHeight || 10000, behavior: 'smooth' });
     }
-    await sleep(1500);
+    await sleep(2000);
 
-    // 1. Direct Next button selectors
-    const nextBtn = document.querySelector(
-      '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"], button[aria-label*="next page" i], button[aria-label*="next" i], .artdeco-pagination__pages button.selected + button, .artdeco-pagination__indicator--number.selected + li button'
-    );
+    // Direct Next button selectors
+    const nextBtnSelectors = [
+      'button.artdeco-pagination__button--next',
+      'button[aria-label="Next"]',
+      'button[aria-label="View next page"]',
+      'button[aria-label*="next page" i]',
+      'button[aria-label*="next" i]',
+      '.artdeco-pagination__pages button.selected + button',
+      '.artdeco-pagination__indicator--number.selected + li button',
+      '[aria-current="true"]'
+    ];
 
-    if (nextBtn) {
-      const isDisabled = nextBtn.disabled || nextBtn.getAttribute('aria-disabled') === 'true' || nextBtn.classList.contains('disabled');
-      if (isDisabled) {
-        log('Reached the last page of results.', 'info');
-        return false;
-      }
+    for (const sel of nextBtnSelectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        if (sel === '[aria-current="true"]') {
+          const nextLi = el.closest('li')?.nextElementSibling;
+          const nextBtnInLi = nextLi?.querySelector('button');
+          if (nextBtnInLi && !nextBtnInLi.disabled) {
+            log(`Navigating to next page via page button (${nextBtnInLi.textContent.trim()})...`, 'info');
+            triggerClick(nextBtnInLi);
+            await sleep(3500);
+            if (listContainer && listContainer !== window && listContainer.scrollTo) {
+              listContainer.scrollTo({ top: 0, behavior: 'instant' });
+            }
+            return true;
+          }
+          continue;
+        }
 
-      log('Navigating to next page of results...', 'info');
-      triggerClick(nextBtn);
-      await sleep(3500);
+        const isDisabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled');
+        if (isDisabled) {
+          log('Reached the last page of results.', 'info');
+          return false;
+        }
 
-      // Reset list scroll to top so cards on the new page are visible from the beginning
-      if (listContainer && listContainer.scrollTo) {
-        listContainer.scrollTo({ top: 0, behavior: 'instant' });
-      }
-      return true;
-    }
-
-    // 2. Fallback: Find currently selected page indicator and click the next page number
-    const activePageEl = document.querySelector('.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages .selected, [aria-current="true"]');
-    if (activePageEl) {
-      const nextSiblingLi = activePageEl.closest('li')?.nextElementSibling;
-      const nextNumBtn = nextSiblingLi?.querySelector('button');
-      if (nextNumBtn && !nextNumBtn.disabled) {
-        log(`Navigating to next page via page number button (${nextNumBtn.textContent.trim()})...`, 'info');
-        triggerClick(nextNumBtn);
+        log('Navigating to next page of results...', 'info');
+        triggerClick(el);
         await sleep(3500);
-        if (listContainer && listContainer.scrollTo) {
+        if (listContainer && listContainer !== window && listContainer.scrollTo) {
           listContainer.scrollTo({ top: 0, behavior: 'instant' });
         }
         return true;
@@ -916,7 +1090,7 @@
     const listContainer = getJobListContainer();
 
     // Reset container scroll to top at the start of each page
-    if (listContainer && listContainer.scrollTo) {
+    if (listContainer && listContainer !== window && listContainer.scrollTo) {
       listContainer.scrollTo({ top: 0, behavior: 'instant' });
       await sleep(600);
     }
@@ -941,15 +1115,13 @@
       }
 
       // 2. Query all job cards currently rendered in DOM
-      const rawCards = Array.from(document.querySelectorAll(
-        '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item, [data-occludable-job-id]'
-      )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
+      const rawCards = getRenderedJobCards();
 
       // 3. Find cards not yet processed on this page
       const unprocessed = [];
       for (const card of rawCards) {
         const jid = extractCardJobId(card);
-        const cardKey = jid ? String(jid) : (card.innerText?.slice(0, 40) || '');
+        const cardKey = jid ? String(jid) : (card.innerText?.slice(0, 50) || '');
         if (cardKey && !processedThisPage.has(cardKey)) {
           unprocessed.push({ card, cardKey });
         }
@@ -994,11 +1166,10 @@
       // 5. Check if bottom of container has been reached
       const activeContainer = getJobListContainer();
       let isAtBottom = false;
-      if (activeContainer && activeContainer.scrollHeight > activeContainer.clientHeight) {
-        isAtBottom = (activeContainer.scrollTop + activeContainer.clientHeight) >= (activeContainer.scrollHeight - 60);
+      if (activeContainer && activeContainer !== window && activeContainer.scrollHeight > activeContainer.clientHeight) {
+        isAtBottom = (activeContainer.scrollTop + activeContainer.clientHeight) >= (activeContainer.scrollHeight - 80);
       }
 
-      // If at bottom and no new cards appeared after 2 scroll checks, page is fully crawled!
       if (isAtBottom && consecutiveNoNewCards >= 2) {
         break;
       }
@@ -1006,26 +1177,26 @@
       // 6. Scroll down the list container to trigger lazy rendering of next card chunk
       scrollCycles++;
       const prevScroll = activeContainer && activeContainer.scrollTop ? activeContainer.scrollTop : 0;
-      if (activeContainer && activeContainer.scrollBy) {
-        activeContainer.scrollBy({ top: 550, behavior: 'smooth' });
-      } else if (activeContainer && activeContainer.scrollTop !== undefined) {
-        activeContainer.scrollTop += 550;
+      if (activeContainer && activeContainer !== window) {
+        if (activeContainer.scrollBy) {
+          activeContainer.scrollBy({ top: 550, behavior: 'smooth' });
+        } else if (activeContainer.scrollTop !== undefined) {
+          activeContainer.scrollTop += 550;
+        }
       } else if (window.scrollBy) {
         window.scrollBy(0, 550);
       }
 
-      // Also scroll the last visible card into view to trigger lazy loading
       if (rawCards.length > 0) {
         try {
           rawCards[rawCards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
         } catch (_) {}
       }
 
-      // Allow LinkedIn Ember/React virtual list time to render next cards
-      await sleep(800);
+      await sleep(1000);
 
       // If scroll didn't move (reached end of scrollable area)
-      if (activeContainer && activeContainer.scrollTop === prevScroll && unprocessed.length === 0) {
+      if (activeContainer && activeContainer !== window && activeContainer.scrollTop === prevScroll && unprocessed.length === 0) {
         consecutiveNoNewCards++;
         if (consecutiveNoNewCards >= 2) break;
       }
@@ -1109,18 +1280,16 @@
         }
 
         // Check if job listings have rendered on the page
-        const existingCards = Array.from(document.querySelectorAll(
-          '.jobs-search-results-list li, div.job-card-container, div[data-job-id], li.jobs-search-results__list-item, [data-occludable-job-id]'
-        )).filter(c => c.offsetWidth > 0 && c.offsetHeight > 0);
+        const existingCards = getRenderedJobCards();
 
         if (existingCards.length === 0) {
           emptyWaitCount++;
-          if (emptyWaitCount <= 3) {
-            log(`Waiting for LinkedIn job listings to load (${emptyWaitCount}/3)...`, 'info');
+          if (emptyWaitCount <= 4) {
+            log(`Waiting for LinkedIn job listings to load (${emptyWaitCount}/4)...`, 'info');
             await sleep(2500);
             continue;
           }
-          log('⚠️ No job listings found on this page after 3 attempts. Checking next steps...', 'warning');
+          log('⚠️ No job listings found on this page after 4 attempts. Checking next steps...', 'warning');
           const hasNext = await navigateToNextPage();
           if (!hasNext) {
             log('No further pages found for current search query.', 'info');

@@ -84,7 +84,7 @@
   ],
   "autoApplierSettings": {
     "targetJobQuery": "Data Analyst",
-    "targetLocation": "Bengaluru, Karnataka, India",
+    "targetLocation": "India",
     "dateFilter": "r86400",
     "sortBy": "DD",
     "dualStrategy": true,

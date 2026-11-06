@@ -8,6 +8,7 @@ This document serves as the permanent chronological reference for all updates, f
 
 | Version | Date & Timestamp | Type | Key Highlights |
 |---|---|---|---|
+| **`v1.1.8`** | 2026-11-06 16:35 IST | **Fix Auto-Apply Engine, Modal Flow & Modern Selectors** | Resolved issue where crawler exited immediately with "No further pages found" and failed to apply; replaced fragile details pane scope (which fell back to `.jobs-description__content` missing the top card & Easy Apply button) with true details pane detection (`.scaffold-layout__detail`, `main.scaffold-layout__main`); fixed card title extraction prioritizing card title link to prevent capturing generic `<h2>About the company</h2>`; made Easy Apply button inspection resilient across all modern LinkedIn variations; removed synthetic `preventDefault()` that blocked React card selection; added smart screening question defaults for experience, notice period, and work authorization; isolated session processed IDs so fresh launches evaluate all listings. |
 | **`v1.1.7`** | 2026-09-17 22:30 IST | **Elimination of Flawed Container Pre-Check** | Removed fragile `listCheck` querySelector that looked for 3 hardcoded container class names, which caused the crawler to falsely report "No search list container found after 3 attempts" and prematurely skip from page 1 to 2 to 3; replaced with direct DOM card detection (`div.job-card-container`, `div[data-job-id]`, `[data-occludable-job-id]`); enhanced `getJobListContainer()` with parent element traversal from rendered cards; synchronized container scrolling with `card.scrollIntoView()`. |
 | **`v1.1.6`** | 2026-09-17 21:45 IST | **Progressive Lazy-Load Page Scanning** | Fixed critical virtualized scrolling issue where the crawler only evaluated the initial 6–7 visible cards per page before prematurely clicking Next; implemented `crawlCurrentPage()` progressive scroll loop that traverses the container down chunk by chunk, loading and processing all ~25 jobs per page; added dynamic `getJobListContainer()` resolver and pagination fallback selector; guaranteed full 100% scanning coverage across all pages (e.g. all 332 results across 14 pages). |
 | **`v1.1.5`** | 2026-09-17 21:30 IST | **Navigation Guard & Infinite Loop Fix** | Prevented full-page browser navigation to `/jobs/view/` by targeting card containers instead of `<a>` anchor tags; added `event.preventDefault()` guard in `triggerClick`; implemented standalone job page auto-detection with self-healing redirect to search query; eliminated infinite "Waiting for LinkedIn job listings to load..." loop; prioritized active LinkedIn window tab in background launcher; added VP/Executive title skip detection. |
@@ -21,6 +22,19 @@ This document serves as the permanent chronological reference for all updates, f
 ---
 
 ## 🔍 Detailed Version Records
+
+### `v1.1.8` — Fix Auto-Apply Engine, Modal Flow & Modern Selectors
+- **Date**: November 6, 2026 (16:35 IST)
+- **Commits**: `fix(crawler): v1.1.8 - fix details pane scope, card title extraction, easy apply detection, and screening form filler`
+- **Files Modified**: `scripts/applier.js`, `scripts/form-filler.js`, `scripts/background.js`, `popup/popup.js`, `popup/popup.html`, `data/default_profile.json`, `manifest.json`, `CHANGELOG.md`.
+- **What Was Added / Updated:**
+  1. **🎯 Details Pane Scoping & Top Card Protection**: Fixed `waitForJobDetails` and `getJobDetailsPane` so the right column container (`.scaffold-layout__detail`, `main.scaffold-layout__main`) is properly targeted instead of falling back to `.jobs-description__content`. This ensures the top card with the official **Easy Apply** button, company name, and badges are always visible to the inspector.
+  2. **🏷️ Accurate Card Title Extraction**: Job titles are now extracted directly from the left rail card's anchor title link first, preventing generic headings such as `<h2>About the company</h2>` from overriding the true title and failing the title relevance filter.
+  3. **⚡ Resilient Easy Apply Button Inspection**: `inspectApplyButton` now queries both the details pane top card and document fallbacks, matching `.jobs-apply-button`, `button.jobs-apply-button--top-card`, and text-based triggers across all modern LinkedIn variations.
+  4. **🖱️ Clean React Event Dispatching**: Removed synthetic `event.preventDefault()` on card anchor tags so LinkedIn's React router successfully switches jobs and renders details upon selection.
+  5. **🤖 Smart Screening Question Auto-Fillers**: Added automatic sensible fallbacks for common unmapped screening questions (years of experience, notice period, expected salary, relocation, work authorization) in `FormFiller.fillCurrentStep`, eliminating unnecessary pauses and stalls.
+  6. **🔄 Session Processed ID Isolation**: When a fresh session is started via "Start Auto-Apply", `processedJobIds` is initialized as empty so previously scanned listings from stopped sessions are evaluated cleanly, while permanently honoring truly applied listings from `appliedJobs` and LinkedIn native badges.
+  7. **🌐 Robust Location & Nationwide Matching**: Defaulted target location to nationwide India with multi-city token resolution so jobs in Hyderabad, Bengaluru, Pune, Delhi NCR, and remote listings are not prematurely skipped.
 
 ### `v1.1.7` — Elimination of Container Pre-Check & Direct Card Detection
 - **Date**: September 17, 2026 (22:30 IST)

@@ -339,7 +339,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Gather latest settings
     const settings = {
       targetJobQuery: ruleQuery.value.trim() || 'Data Analyst',
-      targetLocation: ruleLocation.value.trim() || 'Bengaluru, Karnataka, India',
+      targetLocation: ruleLocation.value.trim() || 'India',
       dateFilter: ruleDateFilter.value,
       sortBy: ruleSortBy.value,
       dualStrategy: ruleDualStrategy.checked,

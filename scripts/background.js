@@ -184,11 +184,15 @@ async function reconcileAnalyticsHistory() {
 
 function buildLinkedInSearchUrl(queryStr, settings = {}) {
   const query = queryStr || 'Data Analyst';
-  const location = settings.targetLocation || 'Bengaluru, Karnataka, India';
+  const location = settings.targetLocation || '';
   const dateFilter = settings.dateFilter || 'r86400'; // r86400 = Past 24 hours, r604800 = Past week
   const sortBy = settings.sortBy || 'DD'; // DD = Most recent
 
-  let url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}`;
+  let url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}`;
+
+  if (location && location.trim() !== '' && location.toLowerCase() !== 'any') {
+    url += `&location=${encodeURIComponent(location)}`;
+  }
 
   if (dateFilter && dateFilter !== 'any') {
     url += `&f_TPR=${encodeURIComponent(dateFilter)}`;
@@ -219,13 +223,12 @@ async function handleStartAutoApply(customSettings) {
   const currentQuery = queryQueue[currentQueryIndex];
   const searchUrl = buildLinkedInSearchUrl(currentQuery, settings);
 
-  const prevProcessed = data.autoApplySession?.processedJobIds || [];
-
+  const targetLocLabel = settings.targetLocation ? `in "${settings.targetLocation}"` : '(All Locations)';
   const queueLabel = queryQueue.length > 1
     ? `role [1/${queryQueue.length}: "${currentQuery}"] (Queue: ${queryQueue.join(', ')})`
     : `"${currentQuery}"`;
 
-  await appendSessionLog(`🚀 Auto-Apply launched for ${queueLabel} in "${settings.targetLocation || 'Bengaluru'}" (Filter: Last 24 Hours)`, 'info');
+  await appendSessionLog(`🚀 Auto-Apply launched for ${queueLabel} ${targetLocLabel} (Filter: Last 24 Hours)`, 'info');
 
   const [currentActive] = await chrome.tabs.query({ active: true, currentWindow: true });
   const isCurrentActiveLinkedIn = currentActive?.url && currentActive.url.includes('linkedin.com');
@@ -270,7 +273,7 @@ async function handleStartAutoApply(customSettings) {
       already_applied: 0,
       unrecognized: 0
     },
-    processedJobIds: prevProcessed
+    processedJobIds: [] // Fresh list for the new session run
   };
 
   const today = getLocalDateKey();
@@ -542,7 +545,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'CHECK_CRAWLER_TAB') {
     chrome.storage.local.get(['autoApplySession'], (data) => {
       const session = data?.autoApplySession;
-      const isAllowed = !!(session?.isRunning && sender.tab && session.tabId === sender.tab.id);
+      const isAllowed = !!(session?.isRunning && sender.tab && (session.tabId === sender.tab.id || !session.tabId));
+      if (isAllowed && session && sender.tab && !session.tabId) {
+        session.tabId = sender.tab.id;
+        chrome.storage.local.set({ autoApplySession: session });
+      }
       sendResponse({ isAllowed, tabId: sender.tab?.id, sessionTabId: session?.tabId });
     });
     return true;
