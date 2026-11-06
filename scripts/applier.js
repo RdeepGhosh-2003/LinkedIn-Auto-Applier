@@ -713,15 +713,50 @@
     return window;
   }
 
+  async function scrollListToTop() {
+    const listContainer = getJobListContainer();
+    try {
+      if (listContainer && listContainer !== window && listContainer.scrollTo) {
+        listContainer.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    } catch (_) {}
+    try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch (_) {}
+    if (document.documentElement) document.documentElement.scrollTop = 0;
+    if (document.body) document.body.scrollTop = 0;
+    await sleep(800);
+  }
+
+  function isNonJobElement(el) {
+    if (!el) return true;
+    const text = (el.innerText || el.textContent || '').toLowerCase();
+    if (text.includes('are these results helpful') ||
+        text.includes('see jobs where you\'re a top applicant') ||
+        text.includes('try premium') ||
+        text.includes('activate premium') ||
+        text.includes('get job alerts for this search') ||
+        text.includes('explore collaborative articles') ||
+        text.includes('how ai search works') ||
+        text.includes('how promoted jobs are ranked')) {
+      const hasJobLink = Boolean(el.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link'));
+      if (!hasJobLink && !extractCardJobId(el)) return true;
+    }
+    return false;
+  }
+
   function getRenderedJobCards() {
     const deduped = [];
     const seenJobIds = new Set();
 
     function tryAddCard(cardEl) {
       if (!cardEl || isInsideDetailsPaneOrNav(cardEl)) return;
+      if (isNonJobElement(cardEl)) return;
       if (!isElementVisible(cardEl)) return;
 
       const jid = extractCardJobId(cardEl);
+      const hasJobLink = Boolean(cardEl.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link'));
+      // A genuine job card MUST have either a valid numeric job ID or an anchor pointing to a job
+      if (!jid && !hasJobLink) return;
+
       const key = jid ? `id_${jid}` : (cardEl.innerText?.slice(0, 60).trim() || '');
       if (key && !seenJobIds.has(key)) {
         seenJobIds.add(key);
@@ -753,7 +788,7 @@
       '.jobs-search-results-list li',
       '[data-occludable-job-id]',
       'div.job-card-container',
-      'div[data-view-name="job-card"]',
+      'div[data-view-name="job-card"], [data-view-name="job-card"]',
       'div[data-job-id]',
       'div.artdeco-entity-lockup[data-job-id]',
       'div.base-card[data-entity-urn]'
@@ -1111,68 +1146,114 @@
     return 'skipped_unrecognized';
   }
 
-  async function navigateToNextPage() {
+  async function navigateToNextPage(currentPageNum = 1) {
     log('Searching for Next Page of job results...', 'info');
 
-    // Smooth scroll down the jobs list container to the bottom so pagination renders
+    // Smooth scroll down the jobs list container and window to ensure pagination renders
     const listContainer = getJobListContainer();
     if (listContainer && listContainer !== window && listContainer.scrollTo) {
       listContainer.scrollTo({ top: listContainer.scrollHeight || 10000, behavior: 'smooth' });
-    } else if (window.scrollTo) {
-      window.scrollTo({ top: document.body.scrollHeight || 10000, behavior: 'smooth' });
     }
+    try { window.scrollTo({ top: document.body?.scrollHeight || 10000, behavior: 'smooth' }); } catch (_) {}
     await sleep(2000);
 
-    // CRITICAL: Strictly scope pagination search to pagination containers!
-    // NEVER query un-scoped 'button[aria-label*="next"]' or '[aria-current="true"]' on the whole document!
-    const paginationContainer = document.querySelector(
-      '.artdeco-pagination, [aria-label*="pagination" i], .jobs-search-pagination, [data-view-name*="pagination"], .jobs-search-results-list__pagination'
-    );
-
-    if (!paginationContainer) {
-      log('No pagination container found on page.', 'info');
-      return false;
+    function isSafePaginationElement(el) {
+      if (!el || !isElementVisible(el)) return false;
+      // CRITICAL: Must NOT be inside the top nav bar, message overlay, details pane, or modals
+      if (el.closest('header, nav.global-nav, .global-nav, #msg-overlay, .msg-overlay-list-bubble, aside, [role="dialog"], .scaffold-layout__detail, [data-view-name="job-details"]')) {
+        return false;
+      }
+      return true;
     }
 
-    // 1. Check for numbered page buttons after current page inside paginationContainer
-    const activePageBtn = paginationContainer.querySelector(
-      'button[aria-current="page"], button[aria-current="true"], li.selected button, .artdeco-pagination__indicator--number.selected button'
+    const targetPageNum = (currentPageNum || 1) + 1;
+
+    // Strategy 1: Check pagination container if present
+    const paginationContainer = document.querySelector(
+      '.artdeco-pagination, [aria-label*="pagination" i], .jobs-search-pagination, [data-view-name*="pagination"], .jobs-search-results-list__pagination, div[class*="pagination"], nav[class*="pagination"], ul[class*="pagination"], .scaffold-layout__list-pagination'
     );
-    if (activePageBtn) {
-      const currentLi = activePageBtn.closest('li');
-      const nextLi = currentLi?.nextElementSibling;
-      const nextBtnInLi = nextLi?.querySelector('button');
-      if (nextBtnInLi && !nextBtnInLi.disabled && nextBtnInLi.getAttribute('aria-disabled') !== 'true') {
-        const nextNum = nextBtnInLi.textContent.trim();
-        log(`Navigating to next page (${nextNum || 'next'})...`, 'info');
-        triggerClick(nextBtnInLi);
+
+    if (paginationContainer && isSafePaginationElement(paginationContainer)) {
+      const pageButtons = Array.from(paginationContainer.querySelectorAll('button, a')).filter(isSafePaginationElement);
+
+      // 1A. Check for next page number button (e.g. "2" if current is 1)
+      const targetBtn = pageButtons.find(b => {
+        const txt = b.textContent?.trim();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return txt === String(targetPageNum) || aria === `page ${targetPageNum}` || aria.includes(`page ${targetPageNum}`);
+      });
+      if (targetBtn && !targetBtn.disabled && targetBtn.getAttribute('aria-disabled') !== 'true') {
+        log(`Navigating to Page ${targetPageNum} via page button...`, 'info');
+        triggerClick(targetBtn);
         await sleep(3500);
-        if (listContainer && listContainer !== window && listContainer.scrollTo) {
-          listContainer.scrollTo({ top: 0, behavior: 'instant' });
+        await scrollListToTop();
+        return true;
+      }
+
+      // 1B. Check for "Next" / "Next >" button in container
+      const nextBtn = pageButtons.find(b => {
+        const txt = (b.innerText || b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        return b.classList.contains('artdeco-pagination__button--next') ||
+               txt === 'next' || txt.startsWith('next') || txt === 'next >' ||
+               aria === 'next' || aria.includes('next page') || aria === 'view next page';
+      });
+      if (nextBtn) {
+        const isDisabled = nextBtn.disabled ||
+                           nextBtn.getAttribute('aria-disabled') === 'true' ||
+                           nextBtn.classList.contains('artdeco-button--disabled') ||
+                           nextBtn.classList.contains('disabled');
+        if (isDisabled) {
+          log('Reached the last page of results (Next button is disabled).', 'info');
+          return false;
         }
+        log('Navigating to next page of results...', 'info');
+        triggerClick(nextBtn);
+        await sleep(3500);
+        await scrollListToTop();
         return true;
       }
     }
 
-    // 2. Direct Next button inside paginationContainer
-    const nextBtn = paginationContainer.querySelector(
-      'button.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="View next page"], button[aria-label*="next page" i]'
-    );
-    if (nextBtn) {
-      const isDisabled = nextBtn.disabled ||
-                         nextBtn.getAttribute('aria-disabled') === 'true' ||
-                         nextBtn.classList.contains('artdeco-button--disabled') ||
-                         nextBtn.classList.contains('disabled');
+    // Strategy 2: Direct Search for Page Number or "Next >" in Search/Main area
+    const searchScope = document.querySelector('.scaffold-layout__list, main, [class*="search-results"]') || document;
+    const candidateButtons = Array.from(searchScope.querySelectorAll('button, a')).filter(isSafePaginationElement);
+
+    // 2A. Find Page Number button (e.g. "2")
+    const docTargetBtn = candidateButtons.find(b => {
+      const txt = b.textContent?.trim();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      return txt === String(targetPageNum) || aria === `page ${targetPageNum}` || aria.includes(`page ${targetPageNum}`);
+    });
+    if (docTargetBtn && !docTargetBtn.disabled && docTargetBtn.getAttribute('aria-disabled') !== 'true') {
+      log(`Navigating to Page ${targetPageNum} via page number...`, 'info');
+      triggerClick(docTargetBtn);
+      await sleep(3500);
+      await scrollListToTop();
+      return true;
+    }
+
+    // 2B. Find "Next >" button
+    const docNextBtn = candidateButtons.find(b => {
+      const txt = (b.innerText || b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      return b.classList.contains('artdeco-pagination__button--next') ||
+             txt === 'next' || txt.startsWith('next') || txt === 'next >' ||
+             aria === 'next' || aria.includes('next page') || aria === 'view next page';
+    });
+    if (docNextBtn) {
+      const isDisabled = docNextBtn.disabled ||
+                         docNextBtn.getAttribute('aria-disabled') === 'true' ||
+                         docNextBtn.classList.contains('artdeco-button--disabled') ||
+                         docNextBtn.classList.contains('disabled');
       if (isDisabled) {
         log('Reached the last page of results (Next button is disabled).', 'info');
         return false;
       }
       log('Navigating to next page of results...', 'info');
-      triggerClick(nextBtn);
+      triggerClick(docNextBtn);
       await sleep(3500);
-      if (listContainer && listContainer !== window && listContainer.scrollTo) {
-        listContainer.scrollTo({ top: 0, behavior: 'instant' });
-      }
+      await scrollListToTop();
       return true;
     }
 
@@ -1181,14 +1262,10 @@
   }
 
   async function crawlCurrentPage(profile, settings, maxJobs, pageNum = 1) {
+    // 1. Guarantee scroll is at the very top at the start of every page
+    await scrollListToTop();
+
     const listContainer = getJobListContainer();
-
-    // Reset container scroll to top at the start of each page
-    if (listContainer && listContainer !== window && listContainer.scrollTo) {
-      listContainer.scrollTo({ top: 0, behavior: 'instant' });
-      await sleep(600);
-    }
-
     const processedThisPage = new Set();
     let consecutiveNoNewCards = 0;
     let scrollCycles = 0;
@@ -1262,24 +1339,29 @@
       let isAtBottom = false;
       if (activeContainer && activeContainer !== window && activeContainer.scrollHeight > activeContainer.clientHeight) {
         isAtBottom = (activeContainer.scrollTop + activeContainer.clientHeight) >= (activeContainer.scrollHeight - 80);
+      } else {
+        const scrollY = window.scrollY || document.documentElement?.scrollTop || document.body?.scrollTop || 0;
+        const innerH = window.innerHeight;
+        const totalH = Math.max(document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0);
+        isAtBottom = (scrollY + innerH) >= (totalH - 120);
       }
 
-      if (isAtBottom && consecutiveNoNewCards >= 2) {
+      // Only finish the page if we have done at least 2 scroll cycles and have reached bottom with no new cards
+      if (scrollCycles >= 2 && isAtBottom && consecutiveNoNewCards >= 2) {
         break;
       }
 
       // 6. Scroll down the list container to trigger lazy rendering of next card chunk
       scrollCycles++;
-      const prevScroll = activeContainer && activeContainer.scrollTop ? activeContainer.scrollTop : 0;
+      const prevScroll = (activeContainer && activeContainer !== window && activeContainer.scrollTop) ? activeContainer.scrollTop : (window.scrollY || 0);
       if (activeContainer && activeContainer !== window) {
         if (activeContainer.scrollBy) {
           activeContainer.scrollBy({ top: 550, behavior: 'smooth' });
         } else if (activeContainer.scrollTop !== undefined) {
           activeContainer.scrollTop += 550;
         }
-      } else if (window.scrollBy) {
-        window.scrollBy(0, 550);
       }
+      try { window.scrollBy({ top: 550, behavior: 'smooth' }); } catch (_) {}
 
       if (rawCards.length > 0) {
         try {
@@ -1290,9 +1372,10 @@
       await sleep(1000);
 
       // If scroll didn't move (reached end of scrollable area)
-      if (activeContainer && activeContainer !== window && activeContainer.scrollTop === prevScroll && unprocessed.length === 0) {
+      const currScroll = (activeContainer && activeContainer !== window && activeContainer.scrollTop) ? activeContainer.scrollTop : (window.scrollY || 0);
+      if (currScroll === prevScroll && unprocessed.length === 0) {
         consecutiveNoNewCards++;
-        if (consecutiveNoNewCards >= 2) break;
+        if (consecutiveNoNewCards >= 2 && scrollCycles >= 2) break;
       }
     }
 
@@ -1345,6 +1428,7 @@
         return;
       }
 
+      await scrollListToTop();
       let emptyWaitCount = 0;
       let currentPageNumber = 1;
 
@@ -1384,7 +1468,7 @@
             continue;
           }
           log('⚠️ No job listings found on this page after 4 attempts. Checking next steps...', 'warning');
-          const hasNext = await navigateToNextPage();
+          const hasNext = await navigateToNextPage(currentPageNumber);
           if (!hasNext) {
             log('No further pages found for current search query.', 'info');
             const finalData = await chrome.storage.local.get(['autoApplySession']);
@@ -1404,7 +1488,7 @@
 
         if (isHalted) break;
 
-        const hasNext = await navigateToNextPage();
+        const hasNext = await navigateToNextPage(currentPageNumber);
         if (!hasNext) {
           log('No further pages found for current search query.', 'info');
           const finalData = await chrome.storage.local.get(['autoApplySession']);

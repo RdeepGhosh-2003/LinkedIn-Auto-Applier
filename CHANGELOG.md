@@ -8,6 +8,7 @@ This document serves as the permanent chronological reference for all updates, f
 
 | Version | Date & Timestamp | Type | Key Highlights |
 |---|---|---|---|
+| **`v1.2.0`** | 2026-11-06 18:10 IST | **Survey Filtering, Auto-Scroll to Top & Resilient Pagination Fallback** | Filtered out in-feed feedback surveys ("Are these results helpful?"), ads, and upsells from candidate job cards by requiring valid numeric job IDs or job view links; added `scrollListToTop()` to guarantee scanning begins at top of search results and mounts all virtualized DOM cards; implemented dual-strategy pagination resolver that targets both numbered page buttons (`1 2 3 Next >`) and scoped Next buttons across all modern LinkedIn routes. |
 | **`v1.1.9`** | 2026-11-06 17:55 IST | **Resilient Invariant-Based Card Detection & Pagination Scoping** | Completely resolved 0-scanned issue where extension failed to detect job cards on modern `/jobs/search-results/` routes. Implemented universal anchor invariant discovery (`a[href*="/jobs/view/"]`, `a[href*="currentJobId="]`) to discover cards regardless of React/CSS-grid layout changes; introduced `isElementVisible` that safely handles `display: contents` (which rendered `offsetWidth == 0`); upgraded `extractCardJobId` to extract numeric job IDs from URNs, attributes, and URLs; strictly scoped `navigateToNextPage()` to `.artdeco-pagination` to eliminate false page navigation clicks on top-bar navigation elements. |
 | **`v1.1.8`** | 2026-11-06 16:35 IST | **Fix Auto-Apply Engine, Modal Flow & Modern Selectors** | Resolved issue where crawler exited immediately with "No further pages found" and failed to apply; replaced fragile details pane scope (which fell back to `.jobs-description__content` missing the top card & Easy Apply button) with true details pane detection (`.scaffold-layout__detail`, `main.scaffold-layout__main`); fixed card title extraction prioritizing card title link to prevent capturing generic `<h2>About the company</h2>`; made Easy Apply button inspection resilient across all modern LinkedIn variations; removed synthetic `preventDefault()` that blocked React card selection; added smart screening question defaults for experience, notice period, and work authorization; isolated session processed IDs so fresh launches evaluate all listings. |
 | **`v1.1.7`** | 2026-09-17 22:30 IST | **Elimination of Flawed Container Pre-Check** | Removed fragile `listCheck` querySelector that looked for 3 hardcoded container class names, which caused the crawler to falsely report "No search list container found after 3 attempts" and prematurely skip from page 1 to 2 to 3; replaced with direct DOM card detection (`div.job-card-container`, `div[data-job-id]`, `[data-occludable-job-id]`); enhanced `getJobListContainer()` with parent element traversal from rendered cards; synchronized container scrolling with `card.scrollIntoView()`. |
@@ -23,6 +24,15 @@ This document serves as the permanent chronological reference for all updates, f
 ---
 
 ## 🔍 Detailed Version Records
+
+### `v1.2.0` — Survey Filtering, Auto-Scroll to Top & Resilient Pagination Fallback
+- **Date**: November 6, 2026 (18:10 IST)
+- **Commits**: `fix(crawler): v1.2.0 - filter in-feed surveys, reset scroll to top on page start, and dual-strategy pagination`
+- **Files Modified**: `scripts/applier.js`, `manifest.json`, `CHANGELOG.md`.
+- **What Was Added / Updated:**
+  1. **🚫 Filter Out Non-Job In-Feed Surveys & Banners**: Added `isNonJobElement()` check to `getRenderedJobCards()`. Elements containing feedback questions (e.g. `"Are these results helpful?"`), Premium promos, or job alert toggles that lack job view anchors or job IDs are now strictly ignored, preventing non-job survey items from being evaluated or counted as jobs.
+  2. **🔝 Mandatory Scroll-to-Top on Page Start**: Added `scrollListToTop()` at the start of `runCrawlLoop()` and `crawlCurrentPage()`. This resets both the container and `window` scroll positions to `0`, ensuring that virtualized listings at the top of the search page (which are unmounted when scrolled to the bottom) are mounted into the DOM and scanned.
+  3. **🔢 Multi-Strategy Next Page & Numbered Button Pagination**: Enhanced `navigateToNextPage(currentPageNum)` to support LinkedIn's modern `1 2 3 Next >` navigation. Strategy 1 queries pagination containers, and Strategy 2 falls back to a document-wide search scoped strictly within `main` and search results (excluding header, messaging overlays, modals, and the details pane). It can click either the target page number (e.g., page 2) or the `"Next >"` button.
 
 ### `v1.1.9` — Resilient Invariant-Based Card Detection & Pagination Scoping
 - **Date**: November 6, 2026 (17:55 IST)
