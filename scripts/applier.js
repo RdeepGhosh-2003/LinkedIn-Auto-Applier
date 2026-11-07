@@ -631,43 +631,73 @@
   function extractCardJobId(card) {
     if (!card) return null;
     try {
-      // 1. Direct attributes on card
-      const rawAttrs = [
-        card.getAttribute('data-job-id'),
-        card.getAttribute('data-occludable-job-id'),
-        card.getAttribute('data-entity-urn'),
-        card.getAttribute('id')
-      ];
-      for (const attr of rawAttrs) {
-        if (attr) {
-          const m = attr.match(/\d{6,14}/);
+      // 1. Direct job data attributes on card (NEVER use generic 'id' or ember IDs)
+      const dataAttrs = ['data-job-id', 'data-occludable-job-id', 'data-entity-urn'];
+      for (const attrName of dataAttrs) {
+        const val = card.getAttribute(attrName);
+        if (val) {
+          const m = val.match(/\d{6,14}/);
           if (m) return m[0];
         }
       }
 
-      // 2. Child attributes
+      // 2. Job data attributes on child elements
       const childWithAttr = card.querySelector('[data-job-id], [data-occludable-job-id], [data-entity-urn]');
       if (childWithAttr) {
-        const childAttr = childWithAttr.getAttribute('data-job-id') ||
-                          childWithAttr.getAttribute('data-occludable-job-id') ||
-                          childWithAttr.getAttribute('data-entity-urn');
-        if (childAttr) {
-          const m = childAttr.match(/\d{6,14}/);
-          if (m) return m[0];
+        for (const attrName of dataAttrs) {
+          const val = childWithAttr.getAttribute(attrName);
+          if (val) {
+            const m = val.match(/\d{6,14}/);
+            if (m) return m[0];
+          }
         }
       }
 
-      // 3. Links inside card or card itself
-      const links = card.tagName === 'A' ? [card] : Array.from(card.querySelectorAll('a[href]'));
-      for (const a of links) {
-        const href = a.getAttribute('href') || a.href || '';
-        const m1 = href.match(/\/jobs\/view\/(\d{6,14})/);
+      // 3. Raw href attribute on job title link or job view link
+      // CRITICAL: NEVER use a.href which resolves to window.location! Use a.getAttribute('href')!
+      const jobLinks = card.querySelectorAll(
+        'a.job-card-list__title--link, a.job-card-container__link, a[href*="/jobs/view/"], a[data-control-name="job_card_click"]'
+      );
+      for (const a of jobLinks) {
+        const rawHref = a.getAttribute('href') || '';
+        const m1 = rawHref.match(/\/jobs\/view\/(\d{6,14})/);
         if (m1) return m1[1];
-        const m2 = href.match(/currentJobId=(\d{6,14})/);
+        const m2 = rawHref.match(/currentJobId=(\d{6,14})/);
         if (m2) return m2[1];
+      }
+
+      if (card.tagName === 'A') {
+        const rawHref = card.getAttribute('href') || '';
+        const m1 = rawHref.match(/\/jobs\/view\/(\d{6,14})/);
+        if (m1) return m1[1];
+        const m2 = rawHref.match(/currentJobId=(\d{6,14})/);
+        if (m2) return m2[1];
+      }
+
+      // Fallback: any link inside card with /jobs/view/
+      const anyJobView = card.querySelector('a[href*="/jobs/view/"]');
+      if (anyJobView) {
+        const rawHref = anyJobView.getAttribute('href') || '';
+        const m = rawHref.match(/\/jobs\/view\/(\d{6,14})/);
+        if (m) return m[1];
       }
     } catch (_) {}
     return null;
+  }
+
+  function detectCurrentPageNumber() {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const startParam = parseInt(urlParams.get('start'), 10);
+      if (!isNaN(startParam) && startParam >= 0) {
+        return Math.floor(startParam / 25) + 1;
+      }
+      const pageParam = parseInt(urlParams.get('page'), 10);
+      if (!isNaN(pageParam) && pageParam >= 1) {
+        return pageParam;
+      }
+    } catch (_) {}
+    return 1;
   }
 
   function getJobListContainer() {
@@ -737,8 +767,7 @@
         text.includes('explore collaborative articles') ||
         text.includes('how ai search works') ||
         text.includes('how promoted jobs are ranked')) {
-      const hasJobLink = Boolean(el.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link'));
-      if (!hasJobLink && !extractCardJobId(el)) return true;
+      return true;
     }
     return false;
   }
@@ -753,12 +782,11 @@
       if (!isElementVisible(cardEl)) return;
 
       const jid = extractCardJobId(cardEl);
-      const hasJobLink = Boolean(cardEl.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link'));
-      // A genuine job card MUST have either a valid numeric job ID or an anchor pointing to a job
-      if (!jid && !hasJobLink) return;
+      // STRICT REQUIREMENT: Only elements with an authentic extracted numeric job ID are treated as jobs
+      if (!jid) return;
 
-      const key = jid ? `id_${jid}` : (cardEl.innerText?.slice(0, 60).trim() || '');
-      if (key && !seenJobIds.has(key)) {
+      const key = `id_${jid}`;
+      if (!seenJobIds.has(key)) {
         seenJobIds.add(key);
         deduped.push(cardEl);
       }
@@ -767,7 +795,7 @@
     // Tier 1: Invariant Job Link Discovery
     // Every single job card rendered in the search results left rail contains an anchor pointing to the job
     const candidateLinks = Array.from(document.querySelectorAll(
-      'a[href*="/jobs/view/"], a[href*="currentJobId="], a.job-card-list__title--link, a.job-card-container__link, a[data-control-name="job_card_click"]'
+      'a.job-card-list__title--link, a.job-card-container__link, a[href*="/jobs/view/"], a[data-control-name="job_card_click"]'
     ));
 
     for (const link of candidateLinks) {
@@ -782,7 +810,6 @@
 
     // Tier 2: Direct Card Selectors Fallback
     const cardSelectors = [
-      'ul.scaffold-layout__list-container > li',
       'li.jobs-search-results__list-item',
       'li.scaffold-layout__list-item',
       '.jobs-search-results-list li',
@@ -1356,20 +1383,20 @@
       const prevScroll = (activeContainer && activeContainer !== window && activeContainer.scrollTop) ? activeContainer.scrollTop : (window.scrollY || 0);
       if (activeContainer && activeContainer !== window) {
         if (activeContainer.scrollBy) {
-          activeContainer.scrollBy({ top: 550, behavior: 'smooth' });
+          activeContainer.scrollBy({ top: 400, behavior: 'smooth' });
         } else if (activeContainer.scrollTop !== undefined) {
-          activeContainer.scrollTop += 550;
+          activeContainer.scrollTop += 400;
         }
       }
-      try { window.scrollBy({ top: 550, behavior: 'smooth' }); } catch (_) {}
+      try { window.scrollBy({ top: 400, behavior: 'smooth' }); } catch (_) {}
 
       if (rawCards.length > 0) {
         try {
-          rawCards[rawCards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
+          rawCards[rawCards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
         } catch (_) {}
       }
 
-      await sleep(1000);
+      await sleep(1200);
 
       // If scroll didn't move (reached end of scrollable area)
       const currScroll = (activeContainer && activeContainer !== window && activeContainer.scrollTop) ? activeContainer.scrollTop : (window.scrollY || 0);
@@ -1430,7 +1457,7 @@
 
       await scrollListToTop();
       let emptyWaitCount = 0;
-      let currentPageNumber = 1;
+      let currentPageNumber = detectCurrentPageNumber();
 
       while (!isHalted) {
         const currentData = await chrome.storage.local.get(['autoApplySession']);
@@ -1476,6 +1503,7 @@
             break;
           }
           emptyWaitCount = 0;
+          currentPageNumber = detectCurrentPageNumber();
           continue;
         }
 
@@ -1496,8 +1524,13 @@
           break;
         }
 
-        currentPageNumber++;
-        await sleep(2000);
+        const detectedNext = detectCurrentPageNumber();
+        if (detectedNext > currentPageNumber) {
+          currentPageNumber = detectedNext;
+        } else {
+          currentPageNumber++;
+        }
+        await sleep(2500);
       }
     } catch (err) {
       log(`Error in crawl loop: ${err.message}`, 'error');
